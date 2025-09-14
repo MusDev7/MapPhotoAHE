@@ -1,0 +1,3022 @@
+import json
+import os
+import base64
+import hashlib
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
+import argparse
+
+def decrypt_data(encrypted_data, password):
+    """使用AES解密数据"""
+    try:
+        # 提取盐、IV和加密数据
+        salt = bytes.fromhex(encrypted_data[:32])
+        iv = bytes.fromhex(encrypted_data[32:64])
+        ciphertext = encrypted_data[64:]
+        
+        # 使用PBKDF2派生密钥
+        key = PBKDF2(password, salt, dkLen=32, count=1000)
+        
+        # 创建解密器
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        
+        # 解密数据
+        decrypted_data = cipher.decrypt(base64.b64decode(ciphertext))
+        
+        # 移除PKCS7填充
+        padding = decrypted_data[-1]
+        decrypted_data = decrypted_data[:-padding]
+        
+        return decrypted_data.decode('utf-8')
+    except Exception as e:
+        raise ValueError(f"解密失败: {str(e)}")
+
+def encrypt_data(data, password):
+    """使用AES加密数据"""
+    # 生成随机盐和IV
+    salt = get_random_bytes(16)
+    iv = get_random_bytes(16)
+    
+    # 使用PBKDF2派生密钥
+    key = PBKDF2(password, salt, dkLen=32, count=1000)
+    
+    # 创建加密器
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    
+    # PKCS7填充
+    block_size = AES.block_size
+    padding = block_size - len(data) % block_size
+    data += chr(padding) * padding
+    
+    # 加密数据
+    ciphertext = cipher.encrypt(data.encode('utf-8'))
+    
+    # 组合盐、IV和加密数据
+    encrypted_data = salt.hex() + iv.hex() + base64.b64encode(ciphertext).decode('utf-8')
+    
+    return encrypted_data
+
+def process_encrypted_json(input_file, output_dir, password):
+    """
+    处理加密的JSON文件，解密后生成文件夹结构和加密的JS文件
+    
+    参数:
+    input_file: 输入的加密JSON文件路径
+    output_dir: 输出目录
+    password: 解密密码
+    """
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 读取加密的JSON文件
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # 检查是否是加密数据
+    if not data.get('encrypted', False):
+        raise ValueError("输入文件不是加密的JSON文件")
+    
+    # 解密数据
+    decrypted_data = decrypt_data(data['data'], password)
+    data = json.loads(decrypted_data)
+    
+    # 创建照片目录结构
+    thumbs_dir = os.path.join(output_dir, "photos", "thumbs")
+    full_dir = os.path.join(output_dir, "photos", "full")
+    os.makedirs(thumbs_dir, exist_ok=True)
+    os.makedirs(full_dir, exist_ok=True)
+    
+    # 处理每张照片
+    processed_data = []
+    for i, photo in enumerate(data['photos']):
+        # 生成新的文件名
+        name, ext = os.path.splitext(photo.get('filename', f'photo_{i+1}'))
+        new_filename = f"{name}_{i+1}{ext if ext else '.jpg'}"
+        thumb_filename = f"{name}_{i+1}_thumb.jpg"
+        
+        # 处理缩略图
+        if 'thumbDataUrl' in photo and photo['thumbDataUrl'].startswith('data:'):
+            # 提取Base64数据
+            base64_data = photo['thumbDataUrl'].split(',')[1]
+            image_data = base64.b64decode(base64_data)
+            
+            # 保存缩略图
+            with open(os.path.join(thumbs_dir, thumb_filename), 'wb') as f:
+                f.write(image_data)
+        
+        # 处理原图
+        if 'fullDataUrl' in photo and photo['fullDataUrl'].startswith('data:'):
+            # 提取Base64数据
+            base64_data = photo['fullDataUrl'].split(',')[1]
+            image_data = base64.b64decode(base64_data)
+            
+            # 保存原图
+            with open(os.path.join(full_dir, new_filename), 'wb') as f:
+                f.write(image_data)
+        
+        # 更新数据记录
+        processed_photo = {
+            "thumb": f"photos/thumbs/{thumb_filename}",
+            "full": f"photos/full/{new_filename}",
+            "lat": photo.get('lat', 0),
+            "lng": photo.get('lng', 0),
+            "filename": photo.get('filename', new_filename),
+            "timestamp": photo.get('timestamp', ''),
+            "note": photo.get('note', ''),
+            "width": photo.get('width', 0),
+            "height": photo.get('height', 0),
+            "thumbWidth": photo.get('thumbWidth', 60),
+            "thumbHeight": photo.get('thumbHeight', 60)
+        }
+        
+        processed_data.append(processed_photo)
+    
+    return processed_data
+
+def create_encrypted_js_file(processed_data, output_dir, password):
+    """
+    创建加密的JS文件
+    
+    参数:
+    processed_data: 处理后的照片数据
+    output_dir: 输出目录
+    password: 加密密码
+    """
+    # 生成JavaScript变量
+    js_data = json.dumps(processed_data, indent=2, ensure_ascii=False)
+    
+    # 加密数据
+    encrypted_data = encrypt_data(js_data, password)
+    
+    # 生成JS文件内容
+    js_content = f"const a = {json.dumps({'encrypted': True, 'data': encrypted_data}, indent=2, ensure_ascii=False)};"
+    
+    # 保存JS文件
+    with open(os.path.join(output_dir, "photo_data.js"), 'w', encoding='utf-8') as f:
+        f.write(js_content)
+
+def create_html_template(output_dir, encrypted=True):
+    """
+    创建HTML模板文件
+    
+    参数:
+    output_dir: 输出目录
+    encrypted: 是否加密
+    """
+    if encrypted:
+#         template = """<!DOCTYPE html>
+# <html lang="zh-CN">
+# <head>
+#     <meta charset="UTF-8">
+#     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+#     <title>中国照片地图浏览器</title>
+    
+#     <!-- Leaflet CSS -->
+#     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    
+#     <!-- Bootstrap CSS -->
+#     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+#     <!-- Font Awesome 图标 -->
+#     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+#     <!-- inert 属性 polyfill -->
+#     <script src="https://cdn.jsdelivr.net/npm/wicg-inert@3.1.2/dist/inert.min.js"></script>
+    
+#     <!-- CryptoJS库 -->
+#     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    
+#     <style>
+#         body {
+#             margin: 0;
+#             padding: 0;
+#             font-family: Arial, sans-serif;
+#             overflow: hidden;
+#         }
+        
+#         #map {
+#             position: absolute;
+#             top: 0;
+#             bottom: 0;
+#             width: 100%;
+#             height: 100vh;
+#         }
+        
+#         .photo-marker {
+#             border-radius: 4px;
+#             overflow: hidden;
+#             box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+#             cursor: pointer;
+#             transition: all 0.3s ease;
+#             border: 2px solid white;
+#         }
+        
+#         .photo-marker:hover {
+#             transform: scale(1.1);
+#             z-index: 1000 !important;
+#         }
+        
+#         .photo-marker img {
+#             width: 100%;
+#             height: 100%;
+#             display: block;
+#             object-fit: cover;
+#         }
+        
+#         .photo-cluster {
+#             position: relative;
+#             display: flex;
+#             align-items: center;
+#             justify-content: center;
+#             cursor: pointer;
+#             transition: all 0.3s ease;
+#         }
+        
+#         .photo-cluster:hover {
+#             transform: scale(1.1);
+#             z-index: 1000 !important;
+#         }
+        
+#         .cluster-photo {
+#             position: absolute;
+#             border-radius: 4px;
+#             overflow: hidden;
+#             box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+#             border: 2px solid white;
+#         }
+        
+#         .cluster-photo img {
+#             width: 100%;
+#             height: 100%;
+#             object-fit: cover;
+#         }
+        
+#         .cluster-count {
+#             position: absolute;
+#             bottom: -8px;
+#             right: -8px;
+#             background-color: #ff4757;
+#             color: white;
+#             border-radius: 50%;
+#             width: 24px;
+#             height: 24px;
+#             display: flex;
+#             align-items: center;
+#             justify-content: center;
+#             font-size: 12px;
+#             font-weight: bold;
+#             box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+#             z-index: 10;
+#         }
+        
+#         .photo-viewer {
+#             position: fixed;
+#             top: 0;
+#             left: 0;
+#             width: 100%;
+#             height: 100%;
+#             z-index: 1000;
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#             flex-direction: column;
+#             background-color: rgba(0, 0, 0, 0.9);
+#             opacity: 0;
+#             visibility: hidden;
+#             transition: opacity 0.3s ease, visibility 0.3s ease;
+#         }
+        
+#         .photo-viewer.active {
+#             opacity: 1;
+#             visibility: visible;
+#         }
+        
+#         .photo-container {
+#             position: relative;
+#             width: 90%;
+#             height: 70%;
+#             border-radius: 10px;
+#             overflow: hidden;
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#         }
+        
+#         .photo-display {
+#             position: relative;
+#             width: 100%;
+#             height: 100%;
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#         }
+        
+#         .main-photo {
+#             max-width: 90%;
+#             max-height: 90%;
+#             object-fit: contain;
+#             transition: transform 0.3s ease;
+#             border-radius: 8px;
+#             box-shadow: 0 5px 25px rgba(0, 0, 0, 0.25);
+#         }
+        
+#         .photo-controls {
+#             position: absolute;
+#             top: 0;
+#             left: 0;
+#             width: 100%;
+#             height: 100%;
+#             display: flex;
+#             justify-content: space-between;
+#             align-items: center;
+#             padding: 20px;
+#             pointer-events: none;
+#         }
+        
+#         .nav-btn {
+#             width: 50px;
+#             height: 50px;
+#             background-color: rgba(255, 255, 255, 0.9);
+#             border-radius: 50%;
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#             color: #2c3e50;
+#             font-size: 24px;
+#             cursor: pointer;
+#             pointer-events: auto;
+#             transition: all 0.3s ease;
+#             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+#         }
+        
+#         .nav-btn:hover {
+#             background-color: white;
+#             transform: scale(1.1);
+#             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+#         }
+        
+#         .close-btn {
+#             position: absolute;
+#             top: 20px;
+#             right: 20px;
+#             width: 40px;
+#             height: 40px;
+#             background-color: rgba(255, 255, 255, 0.9);
+#             border-radius: 50%;
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#             color: #2c3e50;
+#             font-size: 20px;
+#             cursor: pointer;
+#             z-index: 1010;
+#             transition: all 0.3s ease;
+#             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+#         }
+        
+#         .close-btn:hover {
+#             background-color: white;
+#             transform: scale(1.1);
+#             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+#         }
+        
+#         .photo-toolbar {
+#             display: flex;
+#             justify-content: center;
+#             gap: 10px;
+#             padding: 8px 12px;
+#             background-color: transparent;
+#             margin-top: 15px;
+#             margin-bottom: 10px;
+#         }
+        
+#         .toolbar-btn {
+#             padding: 6px 12px;
+#             background-color: rgba(44, 62, 80, 0.85);
+#             color: white;
+#             border: none;
+#             border-radius: 4px;
+#             cursor: pointer;
+#             transition: all 0.3s ease;
+#             display: flex;
+#             align-items: center;
+#             gap: 4px;
+#             font-size: 14px;
+#         }
+        
+#         .toolbar-btn:hover {
+#             background-color: #34495e;
+#             transform: translateY(-2px);
+#         }
+        
+#         .photo-preview {
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#             gap: 10px;
+#             padding: 12px 20px;
+#             background-color: rgba(255, 255, 255, 0.9);
+#             border-radius: 8px;
+#             box-shadow: 0 2px 15px rgba(0, 0, 0, 极速快3.2);
+#             margin-bottom: 20px;
+#         }
+        
+#         .preview-item {
+#             width: 50px;
+#             height: 50px;
+#             border-radius: 4px;
+#             overflow: hidden;
+#             cursor: pointer;
+#             opacity: 0.6;
+#             transition: all 0.3s ease;
+#             flex-shrink: 0;
+#             position: relative;
+#         }
+        
+#         .preview-item:hover {
+#             opacity: 0.8;
+#             transform: scale(1.1);
+#         }
+        
+#         .preview-item.active {
+#             opacity: 1;
+#             border: 2px solid #3498db;
+#             transform: scale(1.1);
+#         }
+        
+#         .preview-item img {
+#             width: 100%;
+#             height: 100%;
+#             object-fit: cover;
+#         }
+        
+#         .photo-count-indicator {
+#             position: absolute;
+#             bottom: -5px;
+#             right: -5px;
+#             background-color: #3498db;
+#             color: white;
+#             border-radius: 50%;
+#             width: 20px;
+#             height: 20px;
+#             display: flex;
+#             align-items: center;
+#             justify-content: center;
+#             font-size: 11px;
+#             font-weight: bold;
+#             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+#         }
+        
+#         .total-photo-count {
+#             margin-left: 10px;
+#             padding: 4px 10px;
+#             background-color: #2c3e50;
+#             color: white;
+#             border-radius: 12px;
+#             font-size: 13px;
+#             font-weight: bold;
+#         }
+        
+#         .navbar {
+#             z-index: 1000;
+#         }
+        
+#         /* 动画效果 */
+#         @keyframes fadeIn {
+#             from { opacity: 0; }
+#             to { opacity: 1; }
+#         }
+        
+#         @keyframes slideIn {
+#             from { transform: translateY(20px); opacity: 0; }
+#             to { transform: translateY(0); opacity: 1; }
+#         }
+        
+#         .fade-in {
+#             animation: fadeIn 0.5s ease-in;
+#         }
+        
+#         .slide-in {
+#             animation: slideIn 0.5s ease-out;
+#         }
+        
+#         /* 详情面板 */
+#         .photo-details {
+#             position: absolute;
+#             top: 0;
+#             right: -350px;
+#             width: 350px;
+#             height: 100%;
+#             background-color: white;
+#             padding: 20px;
+#             overflow-y: auto;
+#             transition: right 0.3s ease;
+#             box-shadow: -5px 0 15px rgba(0, 0, 0, 0.1);
+#         }
+        
+#         .photo-details.open {
+#             right: 0;
+#         }
+        
+#         .photo-details h3 {
+#             margin-top: 0;
+#             border-bottom: 1px solid #eee;
+#             padding-bottom: 10px;
+#         }
+        
+#         .detail-item {
+#             margin-bottom: 15px;
+#         }
+        
+#         .detail-item label {
+#             font-weight: bold;
+#             display: block;
+#             margin-bottom: 5px;
+#             color: #7f8c8d;
+#         }
+        
+#         .detail-item .value {
+#             color: 2c3e50;
+#         }
+        
+#         /* 备注区域 */
+#         .note-section {
+#             margin-top: 20px;
+#             padding: 15px;
+#             background-color: #f8f9fa;
+#             border-radius: 8px;
+#         }
+        
+#         .note-section h4 {
+#             margin-top: 0;
+#             margin-bottom: 10px;
+#         }
+        
+#         .note-content {
+#             padding: 10px;
+#             border: 1px solid #ddd;
+#             border-radius: 4px;
+#             background-color: white;
+#             min-height: 100px;
+#         }
+        
+#         /* 响应式调整 */
+#         @media (max-width: 768px) {
+#             .photo-container {
+#                 width: 95%;
+#                 height: 60%;
+#             }
+            
+#             .photo-details {
+#                 width: 280px;
+#             }
+            
+#             .photo-toolbar {
+#                 flex-wrap: wrap;
+#             }
+            
+#             .photo-preview {
+#                 flex-wrap: wrap;
+#                 max-width: 90%;
+#             }
+            
+#             .nav-btn {
+#                 width: 40px;
+#                 height: 40px;
+#                 font-size: 18px;
+#             }
+            
+#             .navbar .btn {
+#                 font-size: 12px;
+#                 padding: 5px 8px;
+#             }
+            
+#             #search-input {
+#                 max-width: 150px !important;
+#             }
+#         }
+        
+#         .navbar-hidden {
+#             transform: translateY(-100%);
+#             transition: transform 0.3s ease;
+#         }
+
+#         /* 调整Leaflet缩放控件位置 */
+#         .leaflet-top.leaflet-left {
+#             top: 80px;
+#         }
+
+#         /* 隐藏缩放控件的类 */
+#         .leaflet-control-zoom-hidden {
+#             opacity: 0;
+#             pointer-events: none;
+#             transition: opacity 0.3s ease;
+#         }
+        
+#         /* 密码模态框样式 */
+#         .password-modal {
+#             position: fixed;
+#             top: 0;
+#             left: 0;
+#             width: 100%;
+#             height: 100%;
+#             background-color: rgba(0, 0, 0, 0.5);
+#             display: flex;
+#             justify-content: center;
+#             align-items: center;
+#             z-index: 2000;
+#             opacity: 0;
+#             visibility: hidden;
+#             transition: opacity 0.3s ease, visibility 0.3s ease;
+#         }
+        
+#         .password-modal.active {
+#             opacity: 1;
+#             visibility: visible;
+#         }
+        
+#         .password-modal-content {
+#             background-color: white;
+#             border-radius: 8px;
+#             padding: 20px;
+#             width: 90%;
+#             max-width: 400px;
+#             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+#         }
+        
+#         .password-modal-header {
+#             display: flex;
+#             justify-content: space-between;
+#             align-items: center;
+#             margin-bottom: 15px;
+#         }
+        
+#         .password-modal-title {
+#             margin: 0;
+#             font-size: 1.25rem;
+#         }
+        
+#         .password-modal-close {
+#             background: none;
+#             border: none;
+#             font-size: 1.5rem;
+#             cursor: pointer;
+#         }
+#     </style>
+# </head>
+# <body>
+#     <!-- 导航栏 -->
+#     <nav class="navbar navbar-expand-lg navbar-light bg-light">
+#         <div class="container-fluid">
+#             <span class="navbar-brand mb-0 h1">中国照片地图浏览器</span>
+            
+#             <!-- 添加搜索框 -->
+#             <div class="d-flex align-items-center me-3">
+#                 <div class="input-group">
+#                     <input type="text" id="search-input" class="form-control" placeholder="输入地址进行搜索..." style="max-width: 250px;">
+#                     <button class="btn btn-outline-primary" type="button" onclick="searchLocation()">
+#                         <i class="fas fa-search"></i>
+#                     </button>
+#                     <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()" title="清除搜索标记">
+#                         <i class="fas fa-times"></i>
+#                     </button>
+#                 </div>
+#             </div>
+            
+#             <div class="d-flex">
+#                 <button class="btn btn-outline-info" onclick="toggleFullScreen()">
+#                     <i class="fas fa-expand"></i> 全屏
+#                 </button>
+#             </div>
+#         </div>
+#     </nav>
+    
+#     <!-- 地图容器 -->
+#     <div id="map"></div>
+    
+#     <!-- 照片查看器 -->
+#     <div class="photo-viewer" id="photoViewer">
+#         <div class="close-btn" onclick="closePhotoViewer()">
+#             <i class="fas fa-times"></i>
+#         </div>
+        
+#         <div class="photo-container">
+#             <div class="photo-display">
+#                 <img class="main-photo" id="mainPhoto" src="" alt="Photo">
+#             </div>
+#         </div>
+        
+#         <div class="photo-controls">
+#             <div class="nav-btn prev-btn" onclick="navigatePhoto(-1)">
+#                 <i class="fas fa-chevron-left"></i>
+#             </div>
+#             <div class="nav-btn next-btn" onclick="navigatePhoto(1)">
+#                 <i class="fas fa-chevron-right"></i>
+#             </div>
+#         </div>
+        
+#         <div class="photo-toolbar">
+#             <button class="toolbar-btn" onclick="toggleDetails()">
+#                 <i class="fas fa-info-circle"></i> 详情
+#             </button>
+#             <button class="toolbar-btn" onclick="downloadCurrentPhoto()">
+#                 <i class="fas fa-download"></i> 下载
+#             </button>
+#         </div>
+        
+#         <div class="photo-preview" id="photoPreview">
+#             <!-- 预览小图将通过JS动态添加 -->
+#         </div>
+        
+#         <div class="photo-details" id="photoDetails">
+#             <h3>照片详情</h3>
+#             <div class="detail-item">
+#                 <label>位置</label>
+#                 <div class="value" id="detailLocation"></div>
+#             </div>
+#             <div class="detail-item">
+#                 <label>尺寸</label>
+#                 <div class="value" id="detailDimensions"></div>
+#             </div>
+#             <div class="detail-item">
+#                 <label>文件名称</label>
+#                 <div class="value" id="detailFilename"></div>
+#             </div>
+#             <div class="detail-item">
+#                 <label>添加时间</label>
+#                 <div class="value" id="detailTimestamp"></div>
+#             </div>
+            
+#             <div class="note-section">
+#                 <h4>备注</h4>
+#                 <div class="note-content" id="noteContent">
+#                     <!-- 备注内容将通过JS动态添加 -->
+#                 </div>
+#             </div>
+#         </div>
+#     </div>
+    
+#     <!-- 密码输入模态框 - 使用自定义实现避免 aria-hidden 问题 -->
+#     <div class="password-modal" id="passwordModal">
+#         <div class="password-modal-content">
+#             <div class="password-modal-header">
+#                 <h5 class="password-modal-title">需要密码</h5>
+#                 <button type="button" class="password-modal-close" onclick="hidePasswordModal()" aria-label="关闭">
+#                     <i class="fas fa-times"></i>
+#                 </button>
+#             </div>
+#             <div class="password-modal-body">
+#                 <p>此照片地图数据已加密，请输入密码查看</p>
+#                 <div class="mb-3">
+#                     <label for="viewerPassword" class="form-label">密码</label>
+#                     <input type="password" class="form-control" id="viewerPassword" placeholder="输入密码" autocomplete="off">
+#                 </div>
+#             </div>
+#             <div class="password-modal-footer">
+#                 <button type="button" class="btn btn-secondary" onclick="hidePasswordModal()">取消</button>
+#                 <button type="button" class="btn btn-primary" onclick="decryptData()">确认</button>
+#             </div>
+#         </div>
+#     </div>
+
+#     <!-- 必要的JavaScript库 -->
+#     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+#     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+#     <script src="photo_data.js"></script>
+    
+#     <script>
+
+#         // 全局变量
+#         let map;
+#         let photoMarkers = [];
+#         let photoClusters = {};
+#         let currentViewerMarkers = [];
+#         let currentPhotoIndex = 0;
+#         let searchMarker = null;
+#         let amapKey = 'fe4d710bb0b7ecb71c69ca60b9963e6d'; // 高德地图API密钥
+#         let isDetailsOpen = false;
+#         let decryptedData = null;
+
+#         // 初始化地图
+#         function initMap() {
+#             // 创建地图实例，设置中心点和缩放级别
+#             map = L.map('map').setView([35.8617, 104.1954], 5); // 中国中心点
+            
+#             // 使用高德地图瓦片
+#             L.tileLayer('https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}', {
+#                 attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
+#                 maxZoom: 19
+#             }).addTo(map);
+            
+#             // 监听搜索框的回车键
+#             document.getElementById('search-input').addEventListener('keypress', function(e) {
+#                 if (e.key === 'Enter') {
+#                     searchLocation();
+#                 }
+#             });
+            
+#             // 加载预置的照片数据
+#             loadPredefinedPhotos();
+#         }
+
+#         // 加载预置的照片数据
+#         function loadPredefinedPhotos() {
+#             // 检查是否需要解密
+#             if (a.encrypted) {
+#                 // 显示密码输入框
+#                 showPasswordModal();
+#                 return;
+#             }
+            
+#             // 如果不是加密数据，直接加载
+#             const dataToLoad = a.encrypted ? decryptedData : a;
+#             dataToLoad.forEach(photo => {
+#                 addPhotoToMap(photo);
+#             });
+            
+#             // 更新照片聚类
+#             updatePhotoClusters();
+#         }
+
+#         // 显示密码模态框
+#         function showPasswordModal() {
+#             const modal = document.getElementById('passwordModal');
+#             modal.classList.add('active');
+            
+#             // 使用 inert 属性禁用页面其他内容
+#             document.querySelectorAll('body > *:not(#passwordModal)').forEach(element => {
+#                 element.inert = true;
+#             });
+            
+#             // 自动聚焦到密码输入框
+#             setTimeout(() => {
+#                 document.getElementById('viewerPassword').focus();
+#             }, 100);
+#         }
+
+#         // 隐藏密码模态框
+#         function hidePasswordModal() {
+#             const modal = document.getElementById('passwordModal');
+#             modal.classList.remove('active');
+            
+#             // 移除 inert 属性
+#             document.querySelectorAll('body > *').forEach(element => {
+#                 element.inert = false;
+#             });
+            
+#             // 清空密码字段
+#             document.getElementById('viewerPassword').value = '';
+#         }
+
+#         // 解密数据
+#         function decryptData() {
+#             const password = document.getElementById('viewerPassword').value;
+#             if (!password) {
+#                 alert('请输入密码');
+#                 return;
+#             }
+            
+#             try {
+#                 // 提取盐、IV和加密数据
+#                 const encryptedData = a.data;
+#                 const salt = CryptoJS.enc.Hex.parse(encryptedData.substring(0, 32));
+#                 const iv = CryptoJS.enc.Hex.parse(encryptedData.substring(32, 64));
+#                 const ciphertext = encryptedData.substring(64);
+                
+#                 // 使用PBKDF2派生密钥
+#                 const key = CryptoJS.PBKDF2(password, salt, {
+#                     keySize: 256/32,
+#                     iterations: 1000
+#                 });
+                
+#                 // 解密数据
+#                 const decrypted = CryptoJS.AES.decrypt(ciphertext, key, {
+#                     iv: iv,
+#                     padding: CryptoJS.pad.Pkcs7,
+#                     mode: CryptoJS.mode.CBC
+#                 });
+                
+#                 // 转换为UTF-8字符串
+#                 const decryptedStr = decrypted.toString(CryptoJS.enc.Utf8);
+                
+#                 // 解析JSON数据
+#                 decryptedData = JSON.parse(decryptedStr);
+                
+#                 // 隐藏模态框
+#                 hidePasswordModal();
+                
+#                 // 加载照片数据
+#                 decryptedData.forEach(photo => {
+#                     addPhotoToMap(photo);
+#                 });
+                
+#                 // 更新照片聚类
+#                 updatePhotoClusters();
+                
+#             } catch (error) {
+#                 alert('解密失败，密码错误或数据已损坏');
+#                 // 清空密码字段
+#                 document.getElementById('viewerPassword').value = '';
+#                 document.getElementById('viewerPassword').focus();
+#             }
+#         }
+
+#         // 添加照片到地图
+#         function addPhotoToMap(photo) {
+#             // 创建自定义标记
+#             const img = new Image();
+#             img.onload = function() {
+#                 const marker = L.marker([photo.lat, photo.lng], {
+#                     icon: L.divIcon({
+#                         className: 'photo-marker fade-in',
+#                         html: `<img src="${photo.thumb}" alt="${photo.filename}">`,
+#                         iconSize: [img.width, img.height],
+#                         iconAnchor: [img.width/2, img.height/2]
+#                     })
+#                 });
+                
+#                 // 存储照片数据
+#                 marker.photoData = photo;
+                
+#                 // 添加点击事件
+#                 marker.on('click', function() {
+#                     showPhotoViewer([marker], 0);
+#                 });
+                
+#                 // 添加到地图
+#                 marker.addTo(map);
+#                 photoMarkers.push(marker);
+                
+#                 // 更新照片聚类
+#                 updatePhotoClusters();
+#             };
+#             img.src = photo.thumb;
+#         }
+
+#         // 搜索位置函数
+#         function searchLocation() {
+#             const address = document.getElementById('search-input').value.trim();
+#             if (!address) {
+#                 alert('请输入要搜索的地址');
+#                 return;
+#             }
+            
+#             // 使用高德地图地理编码API
+#             const encodedAddress = encodeURIComponent(address);
+#             const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodedAddress}&output=JSON&key=${amapKey}`;
+            
+#             fetch(url)
+#                 .then(response => response.json())
+#                 .then(data => {
+#                     if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+#                         const location = data.geocodes[0].location;
+#                         const [lng, lat] = location.split(',').map(Number);
+                        
+#                         // 移动到搜索到的位置
+#                         map.setView([lat, lng], 15);
+                        
+#                         // 清除之前的搜索标记
+#                         if (searchMarker) {
+#                             map.removeLayer(searchMarker);
+#                         }
+                        
+#                         // 添加新标记
+#                         searchMarker = L.marker([lat, lng], {
+#                             icon: L.divIcon({
+#                                 className: 'search-marker',
+#                                 html: '<i class="fas fa-map-marker-alt" style="color: #e74c3c; font-size: 30px;"></i>',
+#                                 iconSize: [30, 30],
+#                                 iconAnchor: [15, 30]
+#                             })
+#                         }).addTo(map);
+                        
+#                         // 添加弹出窗口
+#                         searchMarker.bindPopup(`
+#                             <div style="text-align: center;">
+#                                 <strong>${data.geocodes[0].formatted_address}</strong><br>
+#                                 <small>${data.geocodes[0].province} ${data.geocodes[0].city} ${data.geocodes[0].district}</small>
+#                             </div>
+#                         `).openPopup();
+#                     } else {
+#                         alert('未找到该地址，请尝试更具体的地址描述');
+#                     }
+#                 })
+#                 .catch(error => {
+#                     console.error('搜索失败:', error);
+#                     alert('搜索失败，请检查网络连接或稍后重试');
+#                 });
+#         }
+        
+#         // 清除搜索标记
+#         function clearSearch() {
+#             if (searchMarker) {
+#                 map.removeLayer(searchMarker);
+#                 searchMarker = null;
+#             }
+#             document.getElementById('search-input').value = '';
+#         }
+        
+#         // 显示照片查看器
+#         function showPhotoViewer(markers, index) {
+#             currentViewerMarkers = markers;
+#             currentPhotoIndex = index;
+            
+#             // 隐藏导航栏
+#             document.querySelector('.navbar').classList.add('navbar-hidden');
+            
+#             // 隐藏地图缩放控件
+#             const zoomControl = document.querySelector('.leaflet-control-zoom');
+#             if (zoomControl) {
+#                 zoomControl.classList.add('leaflet-control-zoom-hidden');
+#             }
+                
+#             // 显示照片查看器
+#             const photoViewer = document.getElementById('photoViewer');
+#             photoViewer.classList.add('active');
+            
+#             // 更新照片显示
+#             updatePhotoDisplay();
+            
+#             // 更新预览小图
+#             updatePhotoPreviews();
+            
+#             // 关闭详情面板（如果打开）
+#             closeDetails();
+#         }
+        
+#         // 更新照片显示
+#         function updatePhotoDisplay() {
+#             if (currentViewerMarkers.length === 0) return;
+            
+#             const marker = currentViewerMarkers[currentPhotoIndex];
+#             const mainPhoto = document.getElementById('mainPhoto');
+            
+#             // 设置照片URL
+#             mainPhoto.src = marker.photoData.full;
+            
+#             // 更新详情信息
+#             updatePhotoDetails();
+#         }
+        
+#         // 更新照片详情
+#         function updatePhotoDetails() {
+#             if (currentViewerMarkers.length === 0) return;
+            
+#             const marker = currentViewerMarkers[currentPhotoIndex];
+            
+#             document.getElementById('detailLocation').textContent = 
+#                 `${marker.photoData.lat.toFixed(6)}, ${marker.photoData.lng.toFixed(6)}`;
+            
+#             document.getElementById('detailDimensions').textContent = 
+#                 `${marker.photoData.width || '未知'} × ${marker.photoData.height || '未知'}`;
+            
+#             document.getElementById('detailFilename').textContent = 
+#                 marker.photoData.filename;
+            
+#             document.getElementById('detailTimestamp').textContent = 
+#                 marker.photoData.timestamp;
+            
+#             // 更新备注
+#             const noteContent = document.getElementById('noteContent');
+#             if (marker.photoData.note) {
+#                 noteContent.textContent = marker.photoData.note;
+#                 noteContent.style.color = '';
+#                 noteContent.style.fontStyle = '';
+#             } else {
+#                 noteContent.textContent = '暂无备注';
+#                 noteContent.style.color = '#999';
+#                 noteContent.style.fontStyle = 'italic';
+#             }
+#         }
+        
+#         // 更新照片预览
+#         function updatePhotoPreviews() {
+#             const photoPreview = document.getElementById('photoPreview');
+#             photoPreview.innerHTML = '';
+            
+#             // 最多显示8张预览图
+#             const maxPreviews = Math.min(8, currentViewerMarkers.length);
+            
+#             for (let i = 0; i < maxPreviews; i++) {
+#                 const marker = currentViewerMarkers[i];
+#                 const previewItem = document.createElement('div');
+#                 previewItem.className = `preview-item ${i === currentPhotoIndex ? 'active' : ''}`;
+                
+#                 const img = document.createElement('img');
+#                 img.src = marker.photoData.thumb;
+#                 img.alt = `预览图 ${i + 1}`;
+                
+#                 // 如果照片数量超过4张，添加数量指示器
+#                 if (i === maxPreviews - 1 && currentViewerMarkers.length > maxPreviews) {
+#                     const countIndicator = document.createElement('div');
+#                     countIndicator.className = 'photo-count-indicator';
+#                     countIndicator.textContent = `+${currentViewerMarkers.length - maxPreviews + 1}`;
+#                     previewItem.appendChild(countIndicator);
+#                 }
+                
+#                 previewItem.appendChild(img);
+#                 previewItem.addEventListener('click', () => {
+#                     navigateToPhoto(i);
+#                 });
+                
+#                 photoPreview.appendChild(previewItem);
+#             }
+            
+#             // 添加总照片数量显示
+#             if (currentViewerMarkers.length > 4) {
+#                 const totalCount = document.createElement('div');
+#                 totalCount.className = 'total-photo-count';
+#                 totalCount.textContent = `${currentPhotoIndex + 1}/${currentViewerMarkers.length}`;
+#                 photoPreview.appendChild(totalCount);
+#             }
+#         }
+        
+#         // 导航到指定照片
+#         function navigateToPhoto(index) {
+#             if (index < 0 || index >= currentViewerMarkers.length) return;
+            
+#             currentPhotoIndex = index;
+#             updatePhotoDisplay();
+#             updatePhotoPreviews();
+#         }
+        
+#         // 导航照片（向前或向后）
+#         function navigatePhoto(direction) {
+#             let newIndex = currentPhotoIndex + direction;
+            
+#             // 循环导航
+#             if (newIndex < 0) {
+#                 newIndex = currentViewerMarkers.length - 1;
+#             } else if (newIndex >= currentViewerMarkers.length) {
+#                 newIndex = 0;
+#             }
+            
+#             navigateToPhoto(newIndex);
+#         }
+        
+#         // 关闭照片查看器
+#         function closePhotoViewer() {
+#             const photoViewer = document.getElementById('photoViewer');
+#             photoViewer.classList.remove('active');
+            
+#             // 显示导航栏
+#             document.querySelector('.navbar').classList.remove('navbar-hidden');
+#             // 显示地图缩放控件
+#             const zoomControl = document.querySelector('.leaflet-control-zoom');
+#             if (zoomControl) {
+#                 zoomControl.classList.remove('leaflet-control-zoom-hidden');
+#             }
+            
+#             currentViewerMarkers = [];
+#             currentPhotoIndex = 0;
+#         }
+        
+#         // 切换详情面板
+#         function toggleDetails() {
+#             const detailsPanel = document.getElementById('photoDetails');
+#             if (isDetailsOpen) {
+#                 detailsPanel.classList.remove('open');
+#             } else {
+#                 detailsPanel.classList.add('open');
+#             }
+#             isDetailsOpen = !isDetailsOpen;
+#         }
+        
+#         // 关闭详情面板
+#         function closeDetails() {
+#             const detailsPanel = document.getElementById('photoDetails');
+#             detailsPanel.classList.remove('open');
+#             isDetailsOpen = false;
+#         }
+        
+#         // 下载当前照片
+#         function downloadCurrentPhoto() {
+#             if (currentViewerMarkers.length === 0) return;
+            
+#             const marker = currentViewerMarkers[currentPhotoIndex];
+#             const link = document.createElement('a');
+#             link.href = marker.photoData.full;
+#             link.download = marker.photoData.filename;
+#             document.body.appendChild(link);
+#             link.click();
+#             document.body.removeChild(link);
+#         }
+        
+#         // 切换全屏模式
+#         function toggleFullScreen() {
+#             if (!document.fullscreenElement) {
+#                 document.documentElement.requestFullscreen().catch(err => {
+#                     console.error(`全屏请求错误: ${err.message}`);
+#                 });
+#             } else {
+#                 if (document.exitFullscreen) {
+#                     document.exitFullscreen();
+#                 }
+#             }
+#         }
+        
+#         // 页面加载完成后初始化地图
+#         window.onload = initMap;
+#     </script>
+# </body>
+# </html>"""
+        template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MapPhoto</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <!-- CryptoJS库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100vh;
+        }
+        
+        .photo-marker {
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid white;
+        }
+        
+        .photo-marker:hover {
+            transform: scale(1.1);
+            z-index: 1000 !important;
+        }
+        
+        .photo-marker img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+        }
+        
+        .photo-cluster {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .photo-cluster:hover {
+            transform: scale(1.1);
+            z-index: 1000 !important;
+        }
+        
+        .cluster-photo {
+            position: absolute;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+            border: 2px solid white;
+        }
+        
+        .cluster-photo img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .cluster-count {
+            position: absolute;
+            bottom: -8px;
+            right: -8px;
+            background-color: #ff4757;
+            color: white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+        
+        .photo-viewer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: rgba(0, 0, 0, 0.9);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+        
+        .photo-viewer.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .photo-container {
+            position: relative;
+            width: 90%;
+            height: 70%;
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .photo-display {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .main-photo {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+            transition: transform 0.3s ease;
+            border-radius: 8px;
+            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.25);
+        }
+        
+        .photo-controls {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            pointer-events: none;
+        }
+        
+        .nav-btn {
+            width: 50px;
+            height: 50px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #2c3e50;
+            font-size: 24px;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+        
+        .nav-btn:hover {
+            background-color: white;
+            transform: scale(1.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .close-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #2c3e50;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 1010;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+        
+        .close-btn:hover {
+            background-color: white;
+            transform: scale(1.1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .photo-toolbar {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background-color: transparent;
+            margin-top: 15px;
+            margin-bottom: 10px;
+        }
+        
+        .toolbar-btn {
+            padding: 6px 12px;
+            background-color: rgba(44, 62, 80, 0.85);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 14px;
+        }
+        
+        .toolbar-btn:hover {
+            background-color: #34495e;
+            transform: translateY(-2px);
+        }
+        
+        .photo-preview {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+        
+        .preview-item {
+            width: 50px;
+            height: 50px;
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+            position: relative;
+        }
+        
+        .preview-item:hover {
+            opacity: 0.8;
+            transform: scale(1.1);
+        }
+        
+        .preview-item.active {
+            opacity: 1;
+            border: 2px solid #3498db;
+            transform: scale(1.1);
+        }
+        
+        .preview-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .photo-count-indicator {
+            position: absolute;
+            bottom: -5px;
+            right: -5px;
+            background-color: #3498db;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        
+        .total-photo-count {
+            margin-left: 10px;
+            padding: 4px 10px;
+            background-color: #2c3e50;
+            color: white;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        
+        .navbar {
+            z-index: 1000;
+        }
+        
+        /* 动画效果 */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        .slide-in {
+            animation: slideIn 0.5s ease-out;
+        }
+        
+        /* 详情面板 */
+        .photo-details {
+            position: absolute;
+            top: 0;
+            right: -350px;
+            width: 350px;
+            height: 100%;
+            background-color: white;
+            padding: 20px;
+            overflow-y: auto;
+            transition: right 0.3s ease;
+            box-shadow: -5px 0 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .photo-details.open {
+            right: 0;
+        }
+        
+        .photo-details h3 {
+            margin-top: 0;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        
+        .detail-item {
+            margin-bottom: 15px;
+        }
+        
+        .detail-item label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 5px;
+            color: #7f8c8d;
+        }
+        
+        .detail-item .value {
+            color: 2c3e50;
+        }
+        
+        /* 备注区域 */
+        .note-section {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .note-section h4 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        
+        .note-content {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: white;
+            min-height: 100px;
+        }
+        
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .photo-container {
+                width: 95%;
+                height: 60%;
+            }
+            
+            .photo-details {
+                width: 280px;
+            }
+            
+            .photo-toolbar {
+                flex-wrap: wrap;
+            }
+            
+            .photo-preview {
+                flex-wrap: wrap;
+                max-width: 90%;
+            }
+            
+            .nav-btn {
+                width: 40px;
+                height: 40px;
+                font-size: 18px;
+            }
+            
+            .navbar .btn {
+                font-size: 12px;
+                padding: 5px 8px;
+            }
+            
+            #search-input {
+                max-width: 150px !important;
+            }
+        }
+        
+        .navbar-hidden {
+            transform: translateY(-100%);
+            transition: transform 0.3s ease;
+        }
+
+        /* 调整Leaflet缩放控件位置 */
+        .leaflet-top.leaflet-left {
+            top: 80px;
+        }
+
+        /* 隐藏缩放控件的类 */
+        .leaflet-control-zoom-hidden {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">MapPhoto</span>
+            
+            <!-- 添加搜索框 -->
+            <div class="d-flex align-items-center me-3">
+                <div class="input-group">
+                    <input type="text" id="search-input" class="form-control" placeholder="输入地址进行搜索..." style="max-width: 250px;">
+                    <button class="btn btn-outline-primary" type="button" onclick="searchLocation()">
+                        <i class="fas fa-search"></i>
+                    </button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()" title="清除搜索标记">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="d-flex">
+                <button class="btn btn-outline-info" onclick="toggleFullScreen()">
+                    <i class="fas fa-expand"></i> 全屏
+                </button>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- 地图容器 -->
+    <div id="map"></div>
+    
+    <!-- 照片查看器 -->
+    <div class="photo-viewer" id="photoViewer">
+        <div class="close-btn" onclick="closePhotoViewer()">
+            <i class="fas fa-times"></i>
+        </div>
+        
+        <div class="photo-container">
+            <div class="photo-display">
+                <img class="main-photo" id="mainPhoto" src="" alt="Photo">
+            </div>
+        </div>
+        
+        <div class="photo-controls">
+            <div class="nav-btn prev-btn" onclick="navigatePhoto(-1)">
+                <i class="fas fa-chevron-left"></i>
+            </div>
+            <div class="nav-btn next-btn" onclick="navigatePhoto(1)">
+                <i class="fas fa-chevron-right"></i>
+            </div>
+        </div>
+        
+        <div class="photo-toolbar">
+            <button class="toolbar-btn" onclick="toggleDetails()">
+                <i class="fas fa-info-circle"></i> 详情
+            </button>
+            <button class="toolbar-btn" onclick="downloadCurrentPhoto()">
+                <i class="fas fa-download"></i> 下载
+            </button>
+        </div>
+        
+        <div class="photo-preview" id="photoPreview">
+            <!-- 预览小图将通过JS动态添加 -->
+        </div>
+        
+        <div class="photo-details" id="photoDetails">
+            <h3>照片详情</h3>
+            <div class="detail-item">
+                <label>位置</label>
+                <div class="value" id="detailLocation"></div>
+            </div>
+            <div class="detail-item">
+                <label>尺寸</label>
+                <div class="value" id="detailDimensions"></div>
+            </div>
+            <div class="detail-item">
+                <label>文件名称</label>
+                <div class="value" id="detailFilename"></div>
+            </div>
+            <div class="detail-item">
+                <label>添加时间</label>
+                <div class="value" id="detailTimestamp"></div>
+            </div>
+            
+            <div class="note-section">
+                <h4>备注</h4>
+                <div class="note-content" id="noteContent">
+                    <!-- 备注内容将通过JS动态添加 -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 密码输入模态框 -->
+    <div class="modal fade" id="passwordModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">需要密码</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>此照片地图数据已加密，请输入密码查看</p>
+                    <div class="mb-3">
+                        <label for="viewerPassword" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="viewerPassword" placeholder="输入密码">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="decryptData()">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 必要的JavaScript库 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    
+    <!-- 照片数据 -->
+    <script src="photo_data.js"></script>
+    
+    <script>
+        // 全局变量
+        let map;
+        let photoMarkers = [];
+        let photoClusters = {};
+        let currentViewerMarkers = [];
+        let currentPhotoIndex = 0;
+        let searchMarker = null;
+        let amapKey = 'fe4d710bb0b7ecb71c69ca60b9963e6d';
+        let isDetailsOpen = false;
+        let decryptedData = null;
+        let passwordModal = null;
+        let isModalOpen = false;
+
+        // 初始化地图
+        function initMap() {
+            // 创建地图实例，设置中心点和缩放级别
+            map = L.map('map').setView([35.8617, 104.1954], 5); // 中国中心点
+            
+            // 使用高德地图瓦片
+            L.tileLayer('https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}', {
+                attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
+                maxZoom: 19
+            }).addTo(map);
+            
+            // 监听搜索框的回车键
+            document.getElementById('search-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchLocation();
+                }
+            });
+            
+            // 加载预置的照片数据
+            loadPredefinedPhotos();
+        }
+
+        // 解密函数
+        function decryptData() {
+            const password = document.getElementById('viewerPassword').value;
+            if (!password) {
+                alert('请输入密码');
+                return;
+            }
+            
+            try {
+                // 提取盐、IV和加密数据
+                const encryptedData = a.data;
+                const salt = CryptoJS.enc.Hex.parse(encryptedData.substring(0, 32));
+                const iv = CryptoJS.enc.Hex.parse(encryptedData.substring(32, 64));
+                const ciphertext = encryptedData.substring(64);
+                
+                // 使用PBKDF2派生密钥
+                const key = CryptoJS.PBKDF2(password, salt, {
+                    keySize: 256/32,
+                    iterations: 1000
+                });
+                
+                // 解密数据
+                const decrypted = CryptoJS.AES.decrypt(ciphertext, key, {
+                    iv: iv,
+                    padding: CryptoJS.pad.Pkcs7,
+                    mode: CryptoJS.mode.CBC
+                });
+                
+                // 转换为UTF-8字符串
+                const decryptedStr = decrypted.toString(CryptoJS.enc.Utf8);
+                
+                // 解析JSON数据
+                decryptedData = JSON.parse(decryptedStr);
+                
+                // 关闭模态框
+                passwordModal.hide();
+
+                // 手动移除模态框背景（添加这行代码）
+                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+                // 清空密码字段
+                document.getElementById('viewerPassword').value = '';
+                
+                // 加载照片数据
+                loadPredefinedPhotos();
+                
+            } catch (error) {
+                alert('解密失败，密码错误或数据已损坏');
+                // 清空密码字段
+                document.getElementById('viewerPassword').value = '';
+                document.getElementById('viewerPassword').focus();
+            }
+        }
+
+        // 加载预置的照片数据
+        function loadPredefinedPhotos() {
+            if (!decryptedData) {
+                // 显示密码输入框
+                const passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'));
+                passwordModal.show();
+                return;
+            }
+            
+            // 确保移除所有模态框背景（添加这行代码）
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+            decryptedData.forEach(photo => {
+                addPhotoToMap(photo);
+            });
+            
+            // 更新照片聚类
+            updatePhotoClusters();
+
+            // 确保地图可以交互（添加这行代码）
+            map.getContainer().style.pointerEvents = 'auto';
+        }
+
+        // 添加照片到地图
+        function addPhotoToMap(photo) {
+            // 创建自定义标记
+            const marker = L.marker([photo.lat, photo.lng], {
+                icon: L.divIcon({
+                    className: 'photo-marker fade-in',
+                    html: `<img src="${photo.thumb}" alt="${photo.filename}">`,
+                    iconSize: [photo.thumbWidth, photo.thumbHeight],
+                    iconAnchor: [photo.thumbWidth/2, photo.thumbHeight/2]
+                })
+            });
+            
+            // 存储照片数据
+            marker.photoData = photo;
+            
+            // 添加点击事件
+            marker.on('click', function() {
+                showPhotoViewer([marker], 0);
+            });
+            
+            // 添加到地图
+            marker.addTo(map);
+            photoMarkers.push(marker);
+        }
+
+        // 更新照片聚类
+        function updatePhotoClusters() {
+            // 清空现有聚类
+            for (const key in photoClusters) {
+                map.removeLayer(photoClusters[key]);
+            }
+            photoClusters = {};
+            
+            // 按位置分组照片
+            const groupedMarkers = {};
+            const clusterDistance = 0.02; // 聚类距离（经纬度）
+            
+            photoMarkers.forEach(marker => {
+                const lat = marker.getLatLng().lat;
+                const lng = marker.getLatLng().lng;
+                
+                // 查找附近的现有聚类
+                let foundCluster = false;
+                for (const key in groupedMarkers) {
+                    const [clusterLat, clusterLng] = key.split(',').map(Number);
+                    const distance = Math.sqrt(Math.pow(lat - clusterLat, 2) + Math.pow(lng - clusterLng, 2));
+                    
+                    if (distance < clusterDistance) {
+                        groupedMarkers[key].push(marker);
+                        foundCluster = true;
+                        break;
+                    }
+                }
+                
+                // 如果没有找到附近的聚类，创建新聚类
+                if (!foundCluster) {
+                    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+                    groupedMarkers[key] = [marker];
+                }
+            });
+            
+            // 为每个组创建聚类标记
+            for (const key in groupedMarkers) {
+                const markers = groupedMarkers[key];
+                
+                if (markers.length > 1) {
+                    // 创建聚类标记 - 显示叠加的照片
+                    const centerLat = markers.reduce((sum, m) => sum + m.getLatLng().lat, 0) / markers.length;
+                    const centerLng = markers.reduce((sum, m) => sum + m.getLatLng().lng, 0) / markers.length;
+                    
+                    // 创建叠加照片的HTML
+                    let clusterHtml = '<div class="photo-cluster">';
+                    
+                    // 最多显示4张照片的叠加
+                    const maxPhotosToShow = Math.min(4, markers.length);
+                    for (let i = 0; i < maxPhotosToShow; i++) {
+                        // 随机旋转角度 (-15° 到 +15°)
+                        const rotation = (Math.random() * 30) - 15;
+                        
+                        // 随机偏移 (-5px 到 +5px)
+                        const offsetX = (Math.random() * 10) - 5;
+                        const offsetY = (Math.random() * 10) - 5;
+
+                        const thumbWidth = markers[i].photoData.thumbWidth;
+                        const thumbHeight = markers[i].photoData.thumbHeight;
+                        const aspectRatio = thumbWidth / thumbHeight;
+                        // 根据宽高比设置显示尺寸
+                        let displayWidth, displayHeight;
+                        if (aspectRatio > 1) {
+                            // 横版照片
+                            displayWidth = i === 0 ? 60 : 50;
+                            displayHeight = displayWidth / aspectRatio;
+                        } else {
+                            // 竖版照片
+                            displayHeight = i === 0 ? 60 : 50;
+                            displayWidth = displayHeight * aspectRatio;
+                        }
+
+                        clusterHtml += `
+                            <div class="cluster-photo" style="
+                                transform: rotate(${rotation}deg);
+                                z-index: ${maxPhotosToShow - i};
+                                left: ${offsetX}px;
+                                top: ${offsetY}px;
+                                width: ${displayWidth}px;
+                                height: ${displayHeight}px;
+                            ">
+                                <img src="${markers[i].photoData.thumb}" alt="Photo">
+                            </div>
+                        `;
+                    }
+                    
+                    // 添加照片数量指示器
+                    if (markers.length > maxPhotosToShow) {
+                        clusterHtml += `<div class="cluster-count">+${markers.length - maxPhotosToShow + 1}</div>`;
+                    }
+                    
+                    clusterHtml += '</div>';
+                    
+                    const cluster = L.marker([centerLat, centerLng], {
+                        icon: L.divIcon({
+                            className: 'fade-in',
+                            html: clusterHtml,
+                            iconSize: [80, 80],
+                            iconAnchor: [40, 40]
+                        })
+                    });
+                    
+                    // 添加点击事件
+                    cluster.on('click', function() {
+                        showPhotoViewer(markers, 0);
+                    });
+                    
+                    // 添加到地图和聚类对象
+                    cluster.addTo(map);
+                    photoClusters[key] = cluster;
+                    
+                    // 隐藏单个标记
+                    markers.forEach(marker => {
+                        map.removeLayer(marker);
+                    });
+                } else {
+                    // 单个照片，确保显示在地图上
+                    if (!map.hasLayer(markers[0])) {
+                        markers[0].addTo(map);
+                    }
+                }
+            }
+        }
+        
+        // 搜索位置函数
+        function searchLocation() {
+            const address = document.getElementById('search-input').value.trim();
+            if (!address) {
+                alert('请输入要搜索的地址');
+                return;
+            }
+            
+            // 使用高德地图地理编码API
+            const encodedAddress = encodeURIComponent(address);
+            const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodedAddress}&output=JSON&key=${amapKey}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                        const location = data.geocodes[0].location;
+                        const [lng, lat] = location.split(',').map(Number);
+                        
+                        // 移动到搜索到的位置
+                        map.setView([lat, lng], 15);
+                        
+                        // 清除之前的搜索标记
+                        if (searchMarker) {
+                            map.removeLayer(searchMarker);
+                        }
+                        
+                        // 添加新标记
+                        searchMarker = L.marker([lat, lng], {
+                            icon: L.divIcon({
+                                className: 'search-marker',
+                                html: '<i class="fas fa-map-marker-alt" style="color: #e74c3c; font-size: 30px;"></i>',
+                                iconSize: [30, 30],
+                                iconAnchor: [15, 30]
+                            })
+                        }).addTo(map);
+                        
+                        // 添加弹出窗口
+                        searchMarker.bindPopup(`
+                            <div style="text-align: center;">
+                                <strong>${data.geocodes[0].formatted_address}</strong><br>
+                                <small>${data.geocodes[0].province} ${data.geocodes[0].city} ${data.geocodes[0].district}</small>
+                            </div>
+                        `).openPopup();
+                    } else {
+                        alert('未找到该地址，请尝试更具体的地址描述');
+                    }
+                })
+                .catch(error => {
+                    console.error('搜索失败:', error);
+                    alert('搜索失败，请检查网络连接或稍后重试');
+                });
+        }
+        
+        // 清除搜索标记
+        function clearSearch() {
+            if (searchMarker) {
+                map.removeLayer(searchMarker);
+                searchMarker = null;
+            }
+            document.getElementById('search-input').value = '';
+        }
+        
+        // 显示照片查看器
+        function showPhotoViewer(markers, index) {
+            currentViewerMarkers = markers;
+            currentPhotoIndex = index;
+            
+            // 隐藏导航栏
+            document.querySelector('.navbar').classList.add('navbar-hidden');
+            
+            // 隐藏地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.add('leaflet-control-zoom-hidden');
+            }
+                
+            // 显示照片查看器
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.add('active');
+            
+            // 更新照片显示
+            updatePhotoDisplay();
+            
+            // 更新预览小图
+            updatePhotoPreviews();
+            
+            // 关闭详情面板（如果打开）
+            closeDetails();
+        }
+        
+        // 更新照片显示
+        function updatePhotoDisplay() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            const mainPhoto = document.getElementById('mainPhoto');
+            
+            // 设置照片URL
+            mainPhoto.src = marker.photoData.full;
+            
+            // 更新详情信息
+            updatePhotoDetails();
+        }
+        
+        // 更新照片详情
+        function updatePhotoDetails() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            
+            document.getElementById('detailLocation').textContent = 
+                `${marker.photoData.lat.toFixed(6)}, ${marker.photoData.lng.toFixed(6)}`;
+            
+            document.getElementById('detailDimensions').textContent = 
+                `${marker.photoData.width || '未知'} × ${marker.photoData.height || '未知'}`;
+            
+            document.getElementById('detailFilename').textContent = 
+                marker.photoData.filename;
+            
+            document.getElementById('detailTimestamp').textContent = 
+                marker.photoData.timestamp;
+            
+            // 更新备注
+            const noteContent = document.getElementById('noteContent');
+            if (marker.photoData.note) {
+                noteContent.textContent = marker.photoData.note;
+            } else {
+                noteContent.textContent = '暂无备注';
+                noteContent.style.color = '#999';
+                noteContent.style.fontStyle = 'italic';
+            }
+        }
+        
+        // 更新照片预览
+        function updatePhotoPreviews() {
+            const photoPreview = document.getElementById('photoPreview');
+            photoPreview.innerHTML = '';
+            
+            // 最多显示8张预览图
+            const maxPreviews = Math.min(8, currentViewerMarkers.length);
+            
+            for (let i = 0; i < maxPreviews; i++) {
+                const marker = currentViewerMarkers[i];
+                const previewItem = document.createElement('div');
+                previewItem.className = `preview-item ${i === currentPhotoIndex ? 'active' : ''}`;
+                
+                const img = document.createElement('img');
+                img.src = marker.photoData.thumb;
+                img.alt = `预览图 ${i + 1}`;
+                
+                // 如果照片数量超过4张，添加数量指示器
+                if (i === maxPreviews - 1 && currentViewerMarkers.length > maxPreviews) {
+                    const countIndicator = document.createElement('div');
+                    countIndicator.className = 'photo-count-indicator';
+                    countIndicator.textContent = `+${currentViewerMarkers.length - maxPreviews + 1}`;
+                    previewItem.appendChild(countIndicator);
+                }
+                
+                previewItem.appendChild(img);
+                previewItem.addEventListener('click', () => {
+                    navigateToPhoto(i);
+                });
+                
+                photoPreview.appendChild(previewItem);
+            }
+            
+            // 添加总照片数量显示
+            if (currentViewerMarkers.length > 4) {
+                const totalCount = document.createElement('div');
+                totalCount.className = 'total-photo-count';
+                totalCount.textContent = `${currentPhotoIndex + 1}/${currentViewerMarkers.length}`;
+                photoPreview.appendChild(totalCount);
+            }
+        }
+        
+        // 导航到指定照片
+        function navigateToPhoto(index) {
+            if (index < 0 || index >= currentViewerMarkers.length) return;
+            
+            currentPhotoIndex = index;
+            updatePhotoDisplay();
+            updatePhotoPreviews();
+        }
+        
+        // 导航照片（向前或向后）
+        function navigatePhoto(direction) {
+            let newIndex = currentPhotoIndex + direction;
+            
+            // 循环导航
+            if (newIndex < 0) {
+                newIndex = currentViewerMarkers.length - 1;
+            } else if (newIndex >= currentViewerMarkers.length) {
+                newIndex = 0;
+            }
+            
+            navigateToPhoto(newIndex);
+        }
+        
+        // 关闭照片查看器
+        function closePhotoViewer() {
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.remove('active');
+            
+            // 显示导航栏
+            document.querySelector('.navbar').classList.remove('navbar-hidden');
+            // 显示地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.remove('leaflet-control-zoom-hidden');
+            }
+            
+            currentViewerMarkers = [];
+            currentPhotoIndex = 0;
+        }
+        
+        // 切换详情面板
+        function toggleDetails() {
+            const detailsPanel = document.getElementById('photoDetails');
+            if (isDetailsOpen) {
+                detailsPanel.classList.remove('open');
+            } else {
+                detailsPanel.classList.add('open');
+            }
+            isDetailsOpen = !isDetailsOpen;
+        }
+        
+        // 关闭详情面板
+        function closeDetails() {
+            const detailsPanel = document.getElementById('photoDetails');
+            detailsPanel.classList.remove('open');
+            isDetailsOpen = false;
+        }
+        
+        // 下载当前照片
+        function downloadCurrentPhoto() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            const link = document.createElement('a');
+            link.href = marker.photoData.full;
+            link.download = marker.photoData.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // 切换全屏模式
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error(`全屏请求错误: ${err.message}`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+        
+        // 显示密码模态框
+        function showPasswordModal() {
+            passwordModal.show();
+        };
+
+
+        // 页面加载完成后初始化地图
+        window.onload = function() {
+            // 初始化地图
+            initMap();
+
+            // 确保没有模态框背景残留（添加这行代码）
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+            // 初始化模态框
+            passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'), {
+                backdrop: 'static', // 禁用点击背景关闭
+                keyboard: false     // 禁用ESC键关闭
+            });
+
+            // 添加模态框事件监听器
+            document.getElementById('passwordModal').addEventListener('shown.bs.modal', function() {
+                isModalOpen = true;
+                // 模态框显示后自动聚焦到密码输入框
+                document.getElementById('viewerPassword').focus();
+            });
+            document.getElementById('passwordModal').addEventListener('hidden.bs.modal', function() {
+                isModalOpen = false;
+            });
+
+            // 监听密码输入框的回车键
+            document.getElementById('viewerPassword').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    decryptData();
+                }
+            });
+            // 检查是否需要解密
+            if (a.encrypted) {
+                // 显示密码输入框
+                showPasswordModal();
+            } else {
+                // 直接加载照片数据
+                decryptedData = a;
+                loadPredefinedPhotos();
+            }
+        };
+
+
+    </script>
+</body>
+</html>"""
+    else:
+        template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中国照片地图浏览器</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        /* 样式内容 */
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <!-- 导航栏内容 -->
+    </nav>
+    
+    <!-- 地图容器 -->
+    <div id="map"></div>
+    
+    <!-- 照片查看器 -->
+    <div class="photo-viewer" id="photoViewer">
+        <!-- 照片查看器内容 -->
+    </div>
+
+    <!-- 必要的JavaScript库 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    
+    <!-- 照片数据 -->
+    <script src="photo_data.js"></script>
+    
+    <script>
+        // 全局变量
+        let a;
+        let map;
+        let photoMarkers = [];
+        let photoClusters = {};
+        let currentViewerMarkers = [];
+        let currentPhotoIndex = 0;
+        let searchMarker = null;
+        let amapKey = 'fe4d710bb0b7ecb71c69ca60b9963e6d';
+        let isDetailsOpen = false;
+        let decryptedData = null;
+        let passwordModal = null;
+        let isModalOpen = false;
+
+        // 初始化地图
+        function initMap() {
+            // 创建地图实例，设置中心点和缩放级别
+            map = L.map('map').setView([35.8617, 104.1954], 5); // 中国中心点
+            
+            // 使用高德地图瓦片
+            L.tileLayer('https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}', {
+                attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
+                maxZoom: 19
+            }).addTo(map);
+            
+            // 监听搜索框的回车键
+            document.getElementById('search-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchLocation();
+                }
+            });
+            
+            // 加载预置的照片数据
+            loadPredefinedPhotos();
+        }
+
+        // 解密函数
+        function decryptData() {
+            const password = document.getElementById('viewerPassword').value;
+            if (!password) {
+                alert('请输入密码');
+                return;
+            }
+            
+            try {
+                // 提取盐、IV和加密数据
+                const encryptedData = a.data;
+                const salt = CryptoJS.enc.Hex.parse(encryptedData.substring(0, 32));
+                const iv = CryptoJS.enc.Hex.parse(encryptedData.substring(32, 64));
+                const ciphertext = encryptedData.substring(64);
+                
+                // 使用PBKDF2派生密钥
+                const key = CryptoJS.PBKDF2(password, salt, {
+                    keySize: 256/32,
+                    iterations: 1000
+                });
+                
+                // 解密数据
+                const decrypted = CryptoJS.AES.decrypt(ciphertext, key, {
+                    iv: iv,
+                    padding: CryptoJS.pad.Pkcs7,
+                    mode: CryptoJS.mode.CBC
+                });
+                
+                // 转换为UTF-8字符串
+                const decryptedStr = decrypted.toString(CryptoJS.enc.Utf8);
+                
+                // 解析JSON数据
+                decryptedData = JSON.parse(decryptedStr);
+                
+                // 关闭模态框
+                passwordModal.hide();
+
+                // 手动移除模态框背景（添加这行代码）
+                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+                // 清空密码字段
+                document.getElementById('viewerPassword').value = '';
+                
+                // 加载照片数据
+                loadPredefinedPhotos();
+                
+            } catch (error) {
+                alert('解密失败，密码错误或数据已损坏');
+                // 清空密码字段
+                document.getElementById('viewerPassword').value = '';
+                document.getElementById('viewerPassword').focus();
+            }
+        }
+
+        // 加载预置的照片数据
+        function loadPredefinedPhotos() {
+            if (!decryptedData) {
+                // 显示密码输入框
+                const passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'));
+                passwordModal.show();
+                return;
+            }
+            
+            // 确保移除所有模态框背景（添加这行代码）
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+            
+            decryptedData.forEach(photo => {
+                addPhotoToMap(photo);
+            });
+            
+            // 更新照片聚类
+            updatePhotoClusters();
+
+            // 确保地图可以交互（添加这行代码）
+            map.getContainer().style.pointerEvents = 'auto';
+        }
+
+        // 添加照片到地图
+        function addPhotoToMap(photo) {
+            // 创建自定义标记
+            const marker = L.marker([photo.lat, photo.lng], {
+                icon: L.divIcon({
+                    className: 'photo-marker fade-in',
+                    html: `<img src="${photo.thumb}" alt="${photo.filename}">`,
+                    iconSize: [photo.thumbWidth, photo.thumbHeight],
+                    iconAnchor: [photo.thumbWidth/2, photo.thumbHeight/2]
+                })
+            });
+            
+            // 存储照片数据
+            marker.photoData = photo;
+            
+            // 添加点击事件
+            marker.on('click', function() {
+                showPhotoViewer([marker], 0);
+            });
+            
+            // 添加到地图
+            marker.addTo(map);
+            photoMarkers.push(marker);
+        }
+
+        // 更新照片聚类
+        function updatePhotoClusters() {
+            // 清空现有聚类
+            for (const key in photoClusters) {
+                map.removeLayer(photoClusters[key]);
+            }
+            photoClusters = {};
+            
+            // 按位置分组照片
+            const groupedMarkers = {};
+            const clusterDistance = 0.01; // 聚类距离（经纬度）
+            
+            photoMarkers.forEach(marker => {
+                const lat = marker.getLatLng().lat;
+                const lng = marker.getLatLng().lng;
+                
+                // 查找附近的现有聚类
+                let foundCluster = false;
+                for (const key in groupedMarkers) {
+                    const [clusterLat, clusterLng] = key.split(',').map(Number);
+                    const distance = Math.sqrt(Math.pow(lat - clusterLat, 2) + Math.pow(lng - clusterLng, 2));
+                    
+                    if (distance < clusterDistance) {
+                        groupedMarkers[key].push(marker);
+                        foundCluster = true;
+                        break;
+                    }
+                }
+                
+                // 如果没有找到附近的聚类，创建新聚类
+                if (!foundCluster) {
+                    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+                    groupedMarkers[key] = [marker];
+                }
+            });
+            
+            // 为每个组创建聚类标记
+            for (const key in groupedMarkers) {
+                const markers = groupedMarkers[key];
+                
+                if (markers.length > 1) {
+                    // 创建聚类标记 - 显示叠加的照片
+                    const centerLat = markers.reduce((sum, m) => sum + m.getLatLng().lat, 0) / markers.length;
+                    const centerLng = markers.reduce((sum, m) => sum + m.getLatLng().lng, 0) / markers.length;
+                    
+                    // 创建叠加照片的HTML
+                    let clusterHtml = '<div class="photo-cluster">';
+                    
+                    // 最多显示4张照片的叠加
+                    const maxPhotosToShow = Math.min(4, markers.length);
+                    for (let i = 0; i < maxPhotosToShow; i++) {
+                        // 随机旋转角度 (-15° 到 +15°)
+                        const rotation = (Math.random() * 30) - 15;
+                        
+                        // 随机偏移 (-5px 到 +5px)
+                        const offsetX = (Math.random() * 10) - 5;
+                        const offsetY = (Math.random() * 10) - 5;
+
+                        const thumbWidth = markers[i].photoData.thumbWidth;
+                        const thumbHeight = markers[i].photoData.thumbHeight;
+                        const aspectRatio = thumbWidth / thumbHeight;
+                        // 根据宽高比设置显示尺寸
+                        let displayWidth, displayHeight;
+                        if (aspectRatio > 1) {
+                            // 横版照片
+                            displayWidth = i === 0 ? 60 : 50;
+                            displayHeight = displayWidth / aspectRatio;
+                        } else {
+                            // 竖版照片
+                            displayHeight = i === 0 ? 60 : 50;
+                            displayWidth = displayHeight * aspectRatio;
+                        }
+
+                        clusterHtml += `
+                            <div class="cluster-photo" style="
+                                transform: rotate(${rotation}deg);
+                                z-index: ${maxPhotosToShow - i};
+                                left: ${offsetX}px;
+                                top: ${offsetY}px;
+                                width: ${displayWidth}px;
+                                height: ${displayHeight}px;
+                            ">
+                                <img src="${markers[i].photoData.thumb}" alt="Photo">
+                            </div>
+                        `;
+                    }
+                    
+                    // 添加照片数量指示器
+                    if (markers.length > maxPhotosToShow) {
+                        clusterHtml += `<div class="cluster-count">+${markers.length - maxPhotosToShow + 1}</div>`;
+                    }
+                    
+                    clusterHtml += '</div>';
+                    
+                    const cluster = L.marker([centerLat, centerLng], {
+                        icon: L.divIcon({
+                            className: 'fade-in',
+                            html: clusterHtml,
+                            iconSize: [80, 80],
+                            iconAnchor: [40, 40]
+                        })
+                    });
+                    
+                    // 添加点击事件
+                    cluster.on('click', function() {
+                        showPhotoViewer(markers, 0);
+                    });
+                    
+                    // 添加到地图和聚类对象
+                    cluster.addTo(map);
+                    photoClusters[key] = cluster;
+                    
+                    // 隐藏单个标记
+                    markers.forEach(marker => {
+                        map.removeLayer(marker);
+                    });
+                } else {
+                    // 单个照片，确保显示在地图上
+                    if (!map.hasLayer(markers[0])) {
+                        markers[0].addTo(map);
+                    }
+                }
+            }
+        }
+        
+        // 搜索位置函数
+        function searchLocation() {
+            const address = document.getElementById('search-input').value.trim();
+            if (!address) {
+                alert('请输入要搜索的地址');
+                return;
+            }
+            
+            // 使用高德地图地理编码API
+            const encodedAddress = encodeURIComponent(address);
+            const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodedAddress}&output=JSON&key=${amapKey}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                        const location = data.geocodes[0].location;
+                        const [lng, lat] = location.split(',').map(Number);
+                        
+                        // 移动到搜索到的位置
+                        map.setView([lat, lng], 15);
+                        
+                        // 清除之前的搜索标记
+                        if (searchMarker) {
+                            map.removeLayer(searchMarker);
+                        }
+                        
+                        // 添加新标记
+                        searchMarker = L.marker([lat, lng], {
+                            icon: L.divIcon({
+                                className: 'search-marker',
+                                html: '<i class="fas fa-map-marker-alt" style="color: #e74c3c; font-size: 30px;"></i>',
+                                iconSize: [30, 30],
+                                iconAnchor: [15, 30]
+                            })
+                        }).addTo(map);
+                        
+                        // 添加弹出窗口
+                        searchMarker.bindPopup(`
+                            <div style="text-align: center;">
+                                <strong>${data.geocodes[0].formatted_address}</strong><br>
+                                <small>${data.geocodes[0].province} ${data.geocodes[0].city} ${data.geocodes[0].district}</small>
+                            </div>
+                        `).openPopup();
+                    } else {
+                        alert('未找到该地址，请尝试更具体的地址描述');
+                    }
+                })
+                .catch(error => {
+                    console.error('搜索失败:', error);
+                    alert('搜索失败，请检查网络连接或稍后重试');
+                });
+        }
+        
+        // 清除搜索标记
+        function clearSearch() {
+            if (searchMarker) {
+                map.removeLayer(searchMarker);
+                searchMarker = null;
+            }
+            document.getElementById('search-input').value = '';
+        }
+        
+        // 显示照片查看器
+        function showPhotoViewer(markers, index) {
+            currentViewerMarkers = markers;
+            currentPhotoIndex = index;
+            
+            // 隐藏导航栏
+            document.querySelector('.navbar').classList.add('navbar-hidden');
+            
+            // 隐藏地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.add('leaflet-control-zoom-hidden');
+            }
+                
+            // 显示照片查看器
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.add('active');
+            
+            // 更新照片显示
+            updatePhotoDisplay();
+            
+            // 更新预览小图
+            updatePhotoPreviews();
+            
+            // 关闭详情面板（如果打开）
+            closeDetails();
+        }
+        
+        // 更新照片显示
+        function updatePhotoDisplay() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            const mainPhoto = document.getElementById('mainPhoto');
+            
+            // 设置照片URL
+            mainPhoto.src = marker.photoData.full;
+            
+            // 更新详情信息
+            updatePhotoDetails();
+        }
+        
+        // 更新照片详情
+        function updatePhotoDetails() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            
+            document.getElementById('detailLocation').textContent = 
+                `${marker.photoData.lat.toFixed(6)}, ${marker.photoData.lng.toFixed(6)}`;
+            
+            document.getElementById('detailDimensions').textContent = 
+                `${marker.photoData.width || '未知'} × ${marker.photoData.height || '未知'}`;
+            
+            document.getElementById('detailFilename').textContent = 
+                marker.photoData.filename;
+            
+            document.getElementById('detailTimestamp').textContent = 
+                marker.photoData.timestamp;
+            
+            // 更新备注
+            const noteContent = document.getElementById('noteContent');
+            if (marker.photoData.note) {
+                noteContent.textContent = marker.photoData.note;
+            } else {
+                noteContent.textContent = '暂无备注';
+                noteContent.style.color = '#999';
+                noteContent.style.fontStyle = 'italic';
+            }
+        }
+        
+        // 更新照片预览
+        function updatePhotoPreviews() {
+            const photoPreview = document.getElementById('photoPreview');
+            photoPreview.innerHTML = '';
+            
+            // 最多显示8张预览图
+            const maxPreviews = Math.min(8, currentViewerMarkers.length);
+            
+            for (let i = 0; i < maxPreviews; i++) {
+                const marker = currentViewerMarkers[i];
+                const previewItem = document.createElement('div');
+                previewItem.className = `preview-item ${i === currentPhotoIndex ? 'active' : ''}`;
+                
+                const img = document.createElement('img');
+                img.src = marker.photoData.thumb;
+                img.alt = `预览图 ${i + 1}`;
+                
+                // 如果照片数量超过4张，添加数量指示器
+                if (i === maxPreviews - 1 && currentViewerMarkers.length > maxPreviews) {
+                    const countIndicator = document.createElement('div');
+                    countIndicator.className = 'photo-count-indicator';
+                    countIndicator.textContent = `+${currentViewerMarkers.length - maxPreviews + 1}`;
+                    previewItem.appendChild(countIndicator);
+                }
+                
+                previewItem.appendChild(img);
+                previewItem.addEventListener('click', () => {
+                    navigateToPhoto(i);
+                });
+                
+                photoPreview.appendChild(previewItem);
+            }
+            
+            // 添加总照片数量显示
+            if (currentViewerMarkers.length > 4) {
+                const totalCount = document.createElement('div');
+                totalCount.className = 'total-photo-count';
+                totalCount.textContent = `${currentPhotoIndex + 1}/${currentViewerMarkers.length}`;
+                photoPreview.appendChild(totalCount);
+            }
+        }
+        
+        // 导航到指定照片
+        function navigateToPhoto(index) {
+            if (index < 0 || index >= currentViewerMarkers.length) return;
+            
+            currentPhotoIndex = index;
+            updatePhotoDisplay();
+            updatePhotoPreviews();
+        }
+        
+        // 导航照片（向前或向后）
+        function navigatePhoto(direction) {
+            let newIndex = currentPhotoIndex + direction;
+            
+            // 循环导航
+            if (newIndex < 0) {
+                newIndex = currentViewerMarkers.length - 1;
+            } else if (newIndex >= currentViewerMarkers.length) {
+                newIndex = 0;
+            }
+            
+            navigateToPhoto(newIndex);
+        }
+        
+        // 关闭照片查看器
+        function closePhotoViewer() {
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.remove('active');
+            
+            // 显示导航栏
+            document.querySelector('.navbar').classList.remove('navbar-hidden');
+            // 显示地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.remove('leaflet-control-zoom-hidden');
+            }
+            
+            currentViewerMarkers = [];
+            currentPhotoIndex = 0;
+        }
+        
+        // 切换详情面板
+        function toggleDetails() {
+            const detailsPanel = document.getElementById('photoDetails');
+            if (isDetailsOpen) {
+                detailsPanel.classList.remove('open');
+            } else {
+                detailsPanel.classList.add('open');
+            }
+            isDetailsOpen = !isDetailsOpen;
+        }
+        
+        // 关闭详情面板
+        function closeDetails() {
+            const detailsPanel = document.getElementById('photoDetails');
+            detailsPanel.classList.remove('open');
+            isDetailsOpen = false;
+        }
+        
+        // 下载当前照片
+        function downloadCurrentPhoto() {
+            if (currentViewerMarkers.length === 0) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            const link = document.createElement('a');
+            link.href = marker.photoData.full;
+            link.download = marker.photoData.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // 切换全屏模式
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error(`全屏请求错误: ${err.message}`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+        
+        // 显示密码模态框
+        function showPasswordModal() {
+            passwordModal.show();
+        };
+
+
+        // 页面加载完成后初始化地图
+        window.onload = function() {
+            // 初始化地图
+            initMap();
+                        
+            // 确保没有模态框背景残留（添加这行代码）
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+            // 初始化模态框
+            passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'), {
+                backdrop: 'static', // 禁用点击背景关闭
+                keyboard: false     // 禁用ESC键关闭
+            });
+
+            // 添加模态框事件监听器
+            document.getElementById('passwordModal').addEventListener('shown.bs.modal', function() {
+                isModalOpen = true;
+                // 模态框显示后自动聚焦到密码输入框
+                document.getElementById('viewerPassword').focus();
+            });
+            document.getElementById('passwordModal').addEventListener('hidden.bs.modal', function() {
+                isModalOpen = false;
+            });
+
+            // 监听密码输入框的回车键
+            document.getElementById('viewerPassword').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    decryptData();
+                }
+            });
+            // 检查是否需要解密
+            if (a.encrypted) {
+                // 显示密码输入框
+                showPasswordModal();
+            } else {
+                // 直接加载照片数据
+                decryptedData = a;
+                loadPredefinedPhotos();
+            }
+        };
+    </script>
+</body>
+</html>"""
+    
+    # 保存HTML文件
+    with open(os.path.join(output_dir, "index.html"), 'w', encoding='utf-8') as f:
+        f.write(template)
+
+def main():
+    """主函数"""
+    parser = argparse.ArgumentParser(description='处理加密的照片地图数据')
+    parser.add_argument('input', help='输入的加密JSON文件路径')
+    parser.add_argument('output', help='输出目录')
+    parser.add_argument('--password', help='解密密码', required=True)
+    parser.add_argument('--encrypt-password', help='加密密码（用于生成JS文件），默认为解密密码')
+    
+    args = parser.parse_args()
+    
+    # 设置加密密码
+    encrypt_password = args.encrypt_password if args.encrypt_password else args.password
+    
+    try:
+        # 处理加密的JSON文件
+        processed_data = process_encrypted_json(args.input, args.output, args.password)
+        
+        # 创建加密的JS文件
+        create_encrypted_js_file(processed_data, args.output, encrypt_password)
+        
+        # 创建HTML模板
+        create_html_template(args.output, encrypted=True)
+        
+        print(f"处理完成！输出目录: {args.output}")
+        print("1. 将整个输出文件夹上传到您的网站服务器")
+        print("2. 访问 index.html 查看照片地图")
+        print("3. 需要输入密码才能查看加密数据")
+        
+    except Exception as e:
+        print(f"处理失败: {str(e)}")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())
