@@ -52,7 +52,7 @@
     
     <!-- 照片查看器 -->
     <div class="photo-viewer" id="photoViewer">
-        <div class="close-btn" onclick="closePhotoViewer()">
+        <div class="close-btn" id="cbt" onclick="closePhotoViewer()">
             <i class="fas fa-times"></i>
         </div>
         
@@ -773,8 +773,10 @@
             const detailsPanel = document.getElementById('photoDetails');
             if (isDetailsOpen) {
                 detailsPanel.classList.remove('open');
+                document.getElementById('cbt').onclick = function(){closePhotoViewer();};
             } else {
                 detailsPanel.classList.add('open');
+                document.getElementById('cbt').onclick = function(){closeDetails();};
             }
             isDetailsOpen = !isDetailsOpen;
         }
@@ -783,6 +785,7 @@
         function closeDetails() {
             const detailsPanel = document.getElementById('photoDetails');
             detailsPanel.classList.remove('open');
+            document.getElementById('cbt').onclick = function(){closePhotoViewer();};
             isDetailsOpen = false;
         }
         
