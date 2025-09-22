@@ -47,6 +47,14 @@
         </div>
     </nav>
     
+    <!-- 数据更新提示弹窗 -->
+    <div id="updateNotification" class="update-notification">
+        <div class="update-notification-content">
+            <i class="fas fa-info-circle"></i>
+            <span id="updateMessage">数据更新至 <span id="updateTime"></span></span>
+        </div>
+    </div>
+
     <!-- 地图容器 -->
     <div id="map"></div>
     
@@ -252,6 +260,7 @@
                 // 加载照片数据
                 loadPredefinedPhotos();
                 
+                setTimeout(showUpdateNotification, 500);
             } catch (error) {
                 alert('解密失败，密码错误或数据已损坏');
                 // 清空密码字段
@@ -821,6 +830,31 @@
             passwordModal.show();
         };
 
+        // 显示数据更新提示
+        function showUpdateNotification() {
+            const updateNotification = document.getElementById('updateNotification');
+            const updateTimeElement = document.getElementById('updateTime');
+            
+            // 获取当前时间
+            const updateTime = decryptedData.exportDate;
+            
+            // 设置更新时间
+            updateTimeElement.textContent = updateTime;
+            
+            // 显示弹窗
+            updateNotification.classList.add('show');
+            
+            // 数秒后隐藏弹窗
+            setTimeout(() => {
+                hideUpdateNotification();
+            }, 5000);
+        }
+
+        // 隐藏数据更新提示
+        function hideUpdateNotification() {
+            const updateNotification = document.getElementById('updateNotification');
+            updateNotification.classList.remove('show');
+        }
 
         // 页面加载完成后初始化地图
         window.onload = function() {
