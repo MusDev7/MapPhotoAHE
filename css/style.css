@@ -774,3 +774,14 @@ body {
         font-size: 13px;
     }
 }
+
+/* 地图源切换按钮样式 */
+.map-source-option.active {
+    background-color: #444444;
+    font-weight: bold;
+}
+
+.map-source-option.active::before {
+    content: "✓";
+    margin-right: 5px;
+}

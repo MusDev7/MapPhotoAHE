@@ -189,10 +189,31 @@
             map = L.map('map').setView([35.8617, 104.1954], 5); // 中国中心点
             
             // 使用高德地图瓦片
-            L.tileLayer('https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}', {
+            standard = L.tileLayer('https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=7', {
                 attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
-                maxZoom: 19
-            }).addTo(map);
+                maxZoom: 19,
+                subdomains: ['1', '2', '3', '4']
+            });
+
+            // 卫星地图
+            satellite = L.tileLayer('https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=6', {
+                attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
+                maxZoom: 19,
+                subdomains: ['1', '2', '3', '4']
+            });
+
+            // 卫星地图-路网
+            satellite_road = L.tileLayer('https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=8', {
+                attribution: '&copy; <a href="https://ditu.amap.com/">高德地图</a>',
+                maxZoom: 19,
+                subdomains: ['1', '2', '3', '4']
+            });
+
+            mapLoader['cur'] = -1; // 缺省值
+            mapLoader['set'] = [standard, satellite, satellite_road]
+            
+            // 默认地图
+            switchMapSource(mapLoader['cur']);
             
             // 监听搜索框的回车键
             document.getElementById('search-input').addEventListener('keypress', function(e) {
@@ -212,6 +233,78 @@
             });
             // 加载预置的照片数据
             loadPredefinedPhotos();
+        }
+
+        function switchMapSource(switchTo) {
+            if (switchTo === -1){
+                mapLoader['set'][0].addTo(map);
+                mapLoader['cur'] = 0;
+                return;
+            }
+
+            if (mapLoader['cur'] === switchTo){
+                return;
+            }
+
+            // 移除当前地图层
+            if (switchTo === 0) {
+                try{
+                    map.removeLayer(mapLoader['set'][2]);
+                } catch {}
+                map.removeLayer(mapLoader['set'][1]);
+                mapLoader['set'][0].addTo(map);
+                mapLoader['cur'] = 0;
+            } else if(switchTo === 1){
+                try{
+                    map.removeLayer(mapLoader['set'][2]);
+                } catch {}
+                try{
+                    map.removeLayer(mapLoader['set'][0]);
+                    mapLoader['set'][1].addTo(map);
+                } catch {}
+                mapLoader['cur'] = 1;
+            } else{
+                try{
+                    map.removeLayer(mapLoader['set'][0]);
+                    mapLoader['set'][1].addTo(map);
+                    mapLoader['set'][2].addTo(map);
+                } catch {
+                    mapLoader['set'][2].addTo(map);
+                }
+                mapLoader['cur'] = 2;
+            }
+            
+            // 更新按钮状态
+            updateMapSourceButtonState(switchTo);
+
+        }
+
+        // 更新地图源按钮状态
+        function updateMapSourceButtonState(sourceKey) {
+            // 更新下拉菜单选项状态
+            document.querySelectorAll('.map-source-option').forEach(option => {
+                if (parseInt(option.dataset.source) === sourceKey) {
+                    option.classList.add('active');
+                } else {
+                    option.classList.remove('active');
+                }
+            });
+            
+            // 更新按钮文本
+            // const mapSourceBtn = document.getElementById('mapSourceBtn');
+            // mapSourceBtn.innerHTML = `<i class="fas fa-layer-group"></i> ${mapSources[sourceKey].name}`;
+        }
+
+        // 初始化地图源切换事件
+        function initMapSourceEvents() {
+            // 地图源选项点击事件
+            document.querySelectorAll('.map-source-option').forEach(option => {
+                option.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const sourceKey = parseInt(this.dataset.source);
+                    switchMapSource(sourceKey);
+                });
+            });
         }
 
         // 解密函数
@@ -260,6 +353,7 @@
                 // 加载照片数据
                 loadPredefinedPhotos();
                 
+                // 显示导出时间
                 setTimeout(showUpdateNotification, 500);
             } catch (error) {
                 alert('解密失败，密码错误或数据已损坏');
@@ -861,6 +955,9 @@
             // 初始化地图
             initMap();
 
+            // 初始化地图源事件
+            initMapSourceEvents();
+
             // 确保没有模态框背景残留（添加这行代码）
             document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
 
@@ -894,6 +991,8 @@
                 // 直接加载照片数据
                 decryptedData = a;
                 loadPredefinedPhotos();
+                // 显示导出时间
+                setTimeout(showUpdateNotification, 500);
             }
         };
 
