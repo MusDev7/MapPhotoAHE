@@ -40,6 +40,18 @@
             </div>
             
             <div class="d-flex">
+                <!-- 地图源切换按钮 -->
+                <div class="btn-group me-2" role="group">
+                    <button id="mapSourceBtn" type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-layer-group"></i> 地图样式
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item map-source-option active" href="#" data-source=0>标准地图</a></li>
+                        <li><a class="dropdown-item map-source-option" href="#" data-source=1>卫星影像</a></li>
+                        <li><a class="dropdown-item map-source-option" href="#" data-source=2>卫星影像（含路网）</a></li>
+                    </ul>
+                </div>
+                
                 <button class="btn btn-outline-info" onclick="toggleFullScreen()">
                     <i class="fas fa-expand"></i> 全屏
                 </button>
