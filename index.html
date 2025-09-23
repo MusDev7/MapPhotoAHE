@@ -128,10 +128,10 @@
                 <label>文件名称</label>
                 <div class="value" id="detailFilename"></div>
             </div>
-            <!-- <div class="detail-item">
-                <label>添加时间</label>
-                <div class="value" id="detailTimestamp"></div>
-            </div> -->
+            <div class="detail-item">
+                <label>拍摄时间</label>
+                <div class="value" id="shotTime"></div>
+            </div>
             
             <div class="note-section">
                 <h4>备注</h4>
@@ -670,6 +670,9 @@
             document.getElementById('detailFilename').textContent = 
                 marker.photoData.filename;
             
+            document.getElementById('shotTime').textContent = 
+                marker.photoData.shotTime;
+                
             // document.getElementById('detailTimestamp').textContent = 
             //     marker.photoData.timestamp;
             
