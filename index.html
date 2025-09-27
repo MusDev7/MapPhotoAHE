@@ -38,7 +38,17 @@
                     </button>
                 </div>
             </div>
-            
+            <!-- 在导航栏搜索框后添加专辑选择器 -->
+            <div class="btn-group me-2">
+                <button id="mapSourceBtn" type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="fa-solid fa-images"></i> 专辑
+                </button>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item album-option active" href="#" data-source=0>敬请期待</a></li>
+                    <li><a class="dropdown-item album-option" href="#" data-source=1>敬请期待</a></li>
+                    <li><a class="dropdown-item album-option" href="#" data-source=2>敬请期待</a></li>
+                </ul>
+            </div>
             <div class="d-flex">
                 <!-- 地图源切换按钮 -->
                 <div class="btn-group me-2" role="group">
