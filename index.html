@@ -38,18 +38,16 @@
                     </button>
                 </div>
             </div>
-            <!-- 在导航栏搜索框后添加专辑选择器 -->
-            <div class="btn-group me-2">
-                <button id="mapSourceBtn" type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="fa-solid fa-images"></i> 专辑
-                </button>
-                <ul class="dropdown-menu">
-                    <li><a class="dropdown-item album-option active" href="#" data-source=0>敬请期待</a></li>
-                    <li><a class="dropdown-item album-option" href="#" data-source=1>敬请期待</a></li>
-                    <li><a class="dropdown-item album-option" href="#" data-source=2>敬请期待</a></li>
-                </ul>
-            </div>
+
             <div class="d-flex">
+                <!-- 在导航栏搜索框后添加专辑选择器 -->
+                <div class="btn-group me-2" role="group">
+                    <button id="albumBtn" type="button" class="btn btn-outline-secondary" onclick="toggleAlbumFloat()">
+                        <i class="fas fa-folder"></i> 专辑
+                    </button>
+                </div>
+
+
                 <!-- 地图源切换按钮 -->
                 <div class="btn-group me-2" role="group">
                     <button id="mapSourceBtn" type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
@@ -61,13 +59,36 @@
                         <li><a class="dropdown-item map-source-option" href="#" data-source=2>卫星影像（含路网）</a></li>
                     </ul>
                 </div>
-                
+
                 <button class="btn btn-outline-info" onclick="toggleFullScreen()">
                     <i class="fas fa-expand"></i> 全屏
                 </button>
             </div>
         </div>
     </nav>
+
+    <!-- 专辑浮框 -->
+    <div id="albumFloat" class="card" style="position: fixed; top: 70px; right: 20px; width: 300px; z-index: 1000; display: none; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-images me-1"></i> 选择专辑</h6>
+            <button type="button" class="btn-close" onclick="closeAlbumFloat(false)"></button>
+        </div>
+        <div class="card-body p-0">
+            <div id="albumList" style="max-height: 400px; overflow-y: auto;">
+                <!-- 专辑列表将通过JS动态添加 -->
+            </div>
+        </div>
+        <div class="card-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary w-100" onclick="closeAlbumFloat(false)">
+                关闭
+            </button>
+        </div>
+    </div>
+
+    <!-- 在照片查看器后添加返回提示 -->
+    <div id="albumReturnTip" class="alert alert-info" style="position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 1001; display: none;">
+        <i class="fas fa-mouse-pointer"></i> 点击任意位置返回专辑
+    </div>
     
     <!-- 数据更新提示弹窗 -->
     <div id="updateNotification" class="update-notification">
@@ -104,6 +125,9 @@
         <div class="photo-toolbar">
             <button class="toolbar-btn" onclick="toggleDetails()">
                 <i class="fas fa-info-circle"></i> 详情
+            </button>
+            <button class="toolbar-btn" id="locateBtn" onclick="locateCurrentPhoto()" style="display: none;">
+                <i class="fas fa-map-marker-alt"></i> 定位
             </button>
             <button class="toolbar-btn" onclick="downloadCurrentPhoto()">
                 <i class="fas fa-download"></i> 下载
@@ -180,8 +204,7 @@
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     
     <!-- 照片数据 -->
-    <!-- <script src="photo_data.js"></script> -->
-    <script src="https://mapphoto-1317341370.cos.ap-beijing.myqcloud.com/photo_data.js"></script>
+    <script src="photo_data.js"></script>
     
     <script>
         // 全局变量
@@ -207,6 +230,16 @@
         let isSidebarOpen = false;
 
         let mapLoader = {};
+
+        let currentAlbum = null;
+        let allAlbums = [];
+        let isAlbumView = false;
+        let highlightMarker = null;
+        let albumReturnClickListener = null;
+        let currentAlbumMarkers = null;
+        let firstLocation = true;
+        let albumPhotoIndex = 0;
+        let isAlbumFloatVisible = false;
 
         // 初始化地图
         function initMap() {
@@ -239,7 +272,7 @@
             
             // 默认地图
             switchMapSource(mapLoader['cur']);
-            
+
             // 监听搜索框的回车键
             document.getElementById('search-input').addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
@@ -375,11 +408,13 @@
                 // 清空密码字段
                 document.getElementById('viewerPassword').value = '';
                 
-                // 加载照片数据
+                // 加载照片和专辑数据
                 loadPredefinedPhotos();
+                loadAlbums();
                 
                 // 显示导出时间
                 setTimeout(showUpdateNotification, 500);
+                
             } catch (error) {
                 alert('解密失败，密码错误或数据已损坏');
                 // 清空密码字段
@@ -624,33 +659,33 @@
             document.getElementById('search-input').value = '';
         }
         
-        // 显示照片查看器
-        function showPhotoViewer(markers, index) {
-            currentViewerMarkers = markers;
-            currentPhotoIndex = index;
+        // // 显示照片查看器
+        // function showPhotoViewer(markers, index) {
+        //     currentViewerMarkers = markers;
+        //     currentPhotoIndex = index;
             
-            // 隐藏导航栏
-            document.querySelector('.navbar').classList.add('navbar-hidden');
+        //     // 隐藏导航栏
+        //     document.querySelector('.navbar').classList.add('navbar-hidden');
             
-            // 隐藏地图缩放控件
-            const zoomControl = document.querySelector('.leaflet-control-zoom');
-            if (zoomControl) {
-                zoomControl.classList.add('leaflet-control-zoom-hidden');
-            }
+        //     // 隐藏地图缩放控件
+        //     const zoomControl = document.querySelector('.leaflet-control-zoom');
+        //     if (zoomControl) {
+        //         zoomControl.classList.add('leaflet-control-zoom-hidden');
+        //     }
                 
-            // 显示照片查看器
-            const photoViewer = document.getElementById('photoViewer');
-            photoViewer.classList.add('active');
+        //     // 显示照片查看器
+        //     const photoViewer = document.getElementById('photoViewer');
+        //     photoViewer.classList.add('active');
             
-            // 更新照片显示
-            updatePhotoDisplay();
+        //     // 更新照片显示
+        //     updatePhotoDisplay();
             
-            // 更新预览小图
-            updatePhotoPreviews();
+        //     // 更新预览小图
+        //     updatePhotoPreviews();
             
-            // 关闭详情面板（如果打开）
-            closeDetails();
-        }
+        //     // 关闭详情面板（如果打开）
+        //     closeDetails();
+        // }
         
         // 更新照片显示
         function updatePhotoDisplay() {
@@ -680,10 +715,10 @@
             
             document.getElementById('detailFilename').textContent = 
                 marker.photoData.filename;
-            
+
             document.getElementById('shotTime').textContent = 
                 marker.photoData.shotTime;
-                
+            
             // document.getElementById('detailTimestamp').textContent = 
             //     marker.photoData.timestamp;
             
@@ -898,6 +933,16 @@
             
             currentViewerMarkers = [];
             currentPhotoIndex = 0;
+
+            // 隐藏返回提示
+            document.getElementById('albumReturnTip').style.display = 'none';
+
+            // 如果是专辑模式，重新显示专辑浮框
+            if (isAlbumView) {
+                setTimeout(() => {
+                    showAlbumFloat();
+                }, 200);
+            }
         }
         
         // 切换详情面板
@@ -978,6 +1023,402 @@
             updateNotification.classList.remove('show');
         }
 
+
+        // 加载专辑数据
+        function loadAlbums() {
+            if (decryptedData && decryptedData.albums) {
+                allAlbums = decryptedData.albums;
+                // renderAlbumSelector();
+                
+                // 如果有专辑，显示选择器
+                // if (allAlbums.length > 0) {
+                //     document.getElementById('albumSelector').style.display = 'block';
+                // }
+            }
+        }
+
+        // // 渲染专辑选择器
+        // function renderAlbumSelector() {
+        //     const selector = document.getElementById('albumSelector');
+            
+        //     // 清空现有选项（保留"所有照片"选项）
+        //     while (selector.children.length > 1) {
+        //         selector.removeChild(selector.lastChild);
+        //     }
+            
+        //     // 添加专辑选项
+        //     allAlbums.forEach((album, index) => {
+        //         const option = document.createElement('option');
+        //         option.value = index;
+        //         option.textContent = `${album.name} (${album.photoIndexes.length})`;
+        //         selector.appendChild(option);
+        //     });
+        // }
+
+        // // 切换专辑
+        // function switchAlbum(albumIndex) {
+        //     if (albumIndex === '') {
+        //         // 显示所有照片
+        //         currentAlbum = null;
+        //         isAlbumView = false;
+        //         showAllPhotos();
+        //         // 隐藏定位按钮
+        //         document.getElementById('locateBtn').style.display = 'none';
+        //     } else {
+        //         // 显示指定专辑的照片
+        //         currentAlbum = allAlbums[parseInt(albumIndex)];
+        //         isAlbumView = true;
+        //         showAlbumPhotos();
+        //         // 显示定位按钮
+        //         document.getElementById('locateBtn').style.display = 'inline-block';
+        //     }
+        // }
+
+        // 显示所有照片
+        function showAllPhotos() {
+            // 移除现有标记
+            photoMarkers.forEach(marker => {
+                map.removeLayer(marker);
+            });
+            photoMarkers = [];
+
+            // 重置专辑状态
+            isAlbumView = false;
+            currentAlbum = null;
+
+            // 重新添加所有照片
+            if (decryptedData && decryptedData.photos) {
+                decryptedData.photos.forEach(photo => {
+                    addPhotoToMap(photo);
+                });
+            }
+            
+            // 更新聚类
+            updatePhotoClusters();
+        }
+
+        // 显示专辑照片
+        function showAlbumPhotos() {
+            if (!currentAlbum) return;
+            
+            // 移除现有标记
+            photoMarkers.forEach(marker => {
+                map.removeLayer(marker);
+            });
+            photoMarkers = [];
+            
+            // 只添加专辑中的照片
+            currentAlbum.photoIndexes.forEach(photoIndex => {
+                if (decryptedData && decryptedData.photos && decryptedData.photos[photoIndex]) {
+                    addPhotoToMap(decryptedData.photos[photoIndex]);
+                }
+            });
+            
+            // 更新聚类
+            updatePhotoClusters();
+            
+            // 如果专辑中有照片，显示照片查看器
+            if (currentAlbum.photoIndexes.length > 0 && decryptedData.photos[currentAlbum.photoIndexes[0]]) {
+                const firstPhotoIndex = currentAlbum.photoIndexes[0];
+                const firstPhoto = decryptedData.photos[firstPhotoIndex];
+                
+                // 创建标记数组用于查看器
+                currentAlbumMarkers = currentAlbum.photoIndexes.map(index => {
+                    const photo = decryptedData.photos[index];
+                    const marker = L.marker([photo.lat, photo.lng], {
+                        icon: L.divIcon({
+                            className: 'photo-marker',
+                            html: `<img src="${SERVER_HOST}${photo.thumb}" alt="${photo.filename}">`,
+                            iconSize: [photo.thumbWidth, photo.thumbHeight],
+                            iconAnchor: [photo.thumbWidth/2, photo.thumbHeight/2]
+                        })
+                    });
+                    marker.photoData = photo;
+                    return marker;
+                });
+                
+                showPhotoViewer(currentAlbumMarkers, 0);
+                
+                // 聚焦到第一个照片的位置
+                map.setView([firstPhoto.lat, firstPhoto.lng], 10);
+            } else {
+                alert('该专辑没有照片或照片数据有误。');
+                isAlbumView = false;
+                currentAlbum = null;
+                showAllPhotos();
+            }
+        }
+
+        // 定位当前照片到地图
+        function locateCurrentPhoto() {
+            if (currentViewerMarkers.length === 0 || !isAlbumView) return;
+            
+            const marker = currentViewerMarkers[currentPhotoIndex];
+            const photoData = marker.photoData;
+
+            if (firstLocation){
+                albumPhotoIndex = currentPhotoIndex;
+                firstLocation = false;
+            }
+            
+            // 关闭照片查看器
+            closePhotoViewer();
+            
+            setTimeout(() => {
+               closeAlbumFloat(true);
+            }, 300);
+
+            // 显示返回提示
+            document.getElementById('albumReturnTip').style.display = 'block';
+            
+            // 定位到照片位置
+            map.setView([photoData.lat, photoData.lng], 10);
+            
+            // 高亮显示当前照片标记
+            // highlightPhotoMarker(photoData);
+            
+            // 显示返回提示和返回按钮
+            const returnTip = document.getElementById('albumReturnTip');
+            returnTip.innerHTML = `
+                <i class="fas fa-map-marker-alt"></i> 
+                <span>已定位到照片位置</span>
+                <button class="btn btn-sm btn-light ms-2" onclick="returnToAlbumView(${albumPhotoIndex})">
+                    <i class="fas fa-arrow-left"></i> 返回专辑
+                </button>
+            `;
+            returnTip.style.display = 'flex';
+
+
+        }
+
+        // 高亮显示照片标记
+        function highlightPhotoMarker(photoData) {
+            // 移除之前的高亮标记
+            if (highlightMarker) {
+                map.removeLayer(highlightMarker);
+                highlightMarker = null;
+            }
+            
+            // 创建高亮标记
+            highlightMarker = L.marker([photoData.lat, photoData.lng], {
+                icon: L.divIcon({
+                    className: 'photo-marker-highlight',
+                    html: `<div style="position: relative;">
+                            <div style="position: absolute; top: -5px; left: -5px; right: -5px; bottom: -5px; border: 3px solid #ff4757; border-radius: 6px; animation: pulse-highlight 2s infinite;"></div>
+                            <img src="${SERVER_HOST}${photoData.thumb}" alt="${photoData.filename}" style="width: 100%; height: 100%; display: block; border-radius: 4px;">
+                        </div>`,
+                    iconSize: [photoData.thumbWidth + 10, photoData.thumbHeight + 10],
+                    iconAnchor: [(photoData.thumbWidth + 10)/2, (photoData.thumbHeight + 10)/2]
+                }),
+                zIndexOffset: 1000
+            }).addTo(map);
+            
+            // 添加点击事件，点击高亮标记也可以返回专辑
+            highlightMarker.on('click', returnToAlbumView);
+        }
+
+        // 修改返回专辑函数，移除高亮标记
+        function returnToAlbumView(index) {
+            // 隐藏返回提示
+            document.getElementById('albumReturnTip').style.display = 'none';
+            
+            // 移除高亮标记
+            if (highlightMarker) {
+                map.removeLayer(highlightMarker);
+                highlightMarker = null;
+            }
+            
+            // 重新显示专辑照片查看器
+            if (currentAlbum && currentAlbumMarkers.length > 0) {
+                firstLocation = true;
+                showPhotoViewer(currentAlbumMarkers, index);
+            }
+        }
+
+        // 修改照片查看器显示函数，支持专辑模式
+        function showPhotoViewer(markers, index) {
+            currentViewerMarkers = markers;
+            currentPhotoIndex = index;
+            
+            // 隐藏导航栏
+            document.querySelector('.navbar').classList.add('navbar-hidden');
+            
+            // 隐藏地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.add('leaflet-control-zoom-hidden');
+            }
+            
+            // // 如果是专辑模式，隐藏专辑选择器
+            // if (isAlbumView) {
+            //     document.getElementById('albumSelector').style.display = 'none';
+            // }
+                
+            // 显示照片查看器
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.add('active');
+            
+            // 更新照片显示
+            updatePhotoDisplay();
+            
+            // 更新预览小图
+            updatePhotoPreviews();
+            
+            // 关闭详情面板（如果打开）
+            closeDetails();
+        }
+
+        // 修改关闭照片查看器函数，支持专辑模式
+        function closePhotoViewer() {
+            const photoViewer = document.getElementById('photoViewer');
+            photoViewer.classList.remove('active');
+            
+            // 清理预览栏中的总数量显示
+            children = document.getElementById('ppc').childNodes;
+            for (var i = children.length - 1; i >= 0; i--) {
+                if (children[i].nodeType === 1 && children[i].classList.contains('total-photo-count')) {
+                    children[i].remove();
+                }
+            }
+            
+            // 显示导航栏
+            document.querySelector('.navbar').classList.remove('navbar-hidden');
+            
+            // 显示地图缩放控件
+            const zoomControl = document.querySelector('.leaflet-control-zoom');
+            if (zoomControl) {
+                zoomControl.classList.remove('leaflet-control-zoom-hidden');
+            }
+            
+            // 隐藏返回提示
+            document.getElementById('albumReturnTip').style.display = 'none';
+            
+            // 如果是专辑模式，重新显示专辑浮框
+            if (isAlbumView) {
+                setTimeout(() => {
+                    showAlbumFloat();
+                }, 300);
+            }
+            // // 如果是专辑模式，显示专辑选择器
+            // if (isAlbumView) {
+            //     document.getElementById('albumSelector').style.display = 'block';
+            // }
+            
+            // 不要清空currentViewerMarkers，因为定位功能需要它们
+        }
+
+        // 切换专辑浮框显示/隐藏
+        function toggleAlbumFloat() {
+            const albumFloat = document.getElementById('albumFloat');
+            
+            if (isAlbumFloatVisible) {
+                closeAlbumFloat(false);
+            } else {
+                showAlbumFloat();
+            }
+        }
+
+        // 显示专辑浮框
+        function showAlbumFloat() {
+            if (!decryptedData || !decryptedData.albums || decryptedData.albums.length === 0) {
+                alert('没有可用的专辑数据');
+                return;
+            }
+            
+            allAlbums = decryptedData.albums;
+            renderAlbumList();
+            
+            const albumFloat = document.getElementById('albumFloat');
+            albumFloat.style.display = 'block';
+            isAlbumFloatVisible = true;
+            
+            // // 添加点击外部关闭浮框的事件
+            // setTimeout(() => {
+            //     document.addEventListener('click', closeAlbumFloatOnClickOutside);
+            // }, 100);
+        }
+
+        // 关闭专辑浮框
+        function closeAlbumFloat(isTemp) {
+            const albumFloat = document.getElementById('albumFloat');
+            albumFloat.style.display = 'none';
+            document.getElementById('locateBtn').style.display = 'inline-block';
+            isAlbumFloatVisible = false;
+            
+            // 移除点击外部关闭的事件
+            // document.removeEventListener('click', closeAlbumFloatOnClickOutside);
+            
+            // 恢复显示所有照片
+            if (!isTemp) {
+                showAllPhotos();
+            }
+        }
+
+        // 点击外部关闭浮框
+        function closeAlbumFloatOnClickOutside(event) {
+            const albumFloat = document.getElementById('albumFloat');
+            const albumBtn = document.getElementById('albumBtn');
+            
+            if (!albumFloat.contains(event.target) && !albumBtn.contains(event.target)) {
+                closeAlbumFloat(isAlbumView);
+            }
+        }
+
+        // 渲染专辑列表
+        function renderAlbumList() {
+            const albumList = document.getElementById('albumList');
+            albumList.innerHTML = '';
+            
+            if (allAlbums.length === 0) {
+                albumList.innerHTML = '<div class="p-3 text-center text-muted">暂无专辑</div>';
+                return;
+            }
+            
+            allAlbums.forEach((album, index) => {
+                const albumItem = document.createElement('div');
+                albumItem.className = 'album-item p-3 border-bottom';
+                albumItem.style.cursor = 'pointer';
+                albumItem.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-1">${album.name}</h6>
+                            <p class="mb-0 text-muted small">${album.description || '暂无描述'}</p>
+                            <small class="text-muted">${album.photoIndexes.length} 张照片</small>
+                        </div>
+                        <i class="fas fa-chevron-right text-muted"></i>
+                    </div>
+                `;
+                
+                albumItem.addEventListener('click', () => {
+                    selectAlbum(index);
+                });
+                
+                albumItem.addEventListener('mouseenter', () => {
+                    albumItem.style.backgroundColor = '#f8f9fa';
+                });
+                
+                albumItem.addEventListener('mouseleave', () => {
+                    albumItem.style.backgroundColor = '';
+                });
+                
+                albumList.appendChild(albumItem);
+            });
+        }
+
+        // 选择专辑
+        function selectAlbum(albumIndex) {
+            currentAlbum = allAlbums[albumIndex];
+            isAlbumView = true;
+            
+            // 关闭专辑浮框
+            closeAlbumFloat(true);
+            
+            // 显示专辑照片查看器
+            showAlbumPhotos();
+
+            document.getElementById('locateBtn').style.display = 'inline-block';
+        }
+
         // 页面加载完成后初始化地图
         window.onload = function() {
             // 初始化地图
@@ -1019,9 +1460,10 @@
                 // 直接加载照片数据
                 decryptedData = a;
                 loadPredefinedPhotos();
-                // 显示导出时间
+                // loadAlbums();  // 加载专辑数据
                 setTimeout(showUpdateNotification, 500);
             }
+
         };
 
 
