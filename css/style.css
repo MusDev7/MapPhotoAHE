@@ -496,7 +496,7 @@ body {
     }
     
     .photo-preview {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         max-width: 90%;
     }
     
@@ -721,7 +721,6 @@ body {
     opacity: 0.3;
 }
 
-
 /* 数据更新提示弹窗 */
 .update-notification {
     position: fixed;
@@ -784,4 +783,151 @@ body {
 .map-source-option.active::before {
     content: "✓";
     margin-right: 5px;
+}
+
+/* 专辑相关样式 */
+#albumBtn {
+    transition: all 0.3s ease;
+}
+
+#albumBtn:hover {
+    transform: translateY(-1px);
+}
+
+/* 专辑浮框样式 */
+#albumFloat {
+    background: white;
+    border-radius: 8px;
+    animation: fadeIn 0.3s ease;
+}
+
+.album-item {
+    transition: all 0.2s ease;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.album-item:last-child {
+    border-bottom: none;
+}
+
+.album-item:hover {
+    background-color: #f8f9fa !important;
+}
+
+.album-item:active {
+    background-color: #e9ecef !important;
+}
+
+
+.photo-selector-item {
+    display: flex;
+    align-items: center;
+    padding: 5px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.photo-selector-item:last-child {
+    border-bottom: none;
+}
+
+.photo-selector-item.selected {
+    background-color: #e3f2fd;
+}
+
+/* 专辑选择器样式 */
+#albumSelector {
+    max-width: 250px;
+}
+
+/* 专辑选择器样式 */
+#albumSelector {
+    max-width: 250px;
+    transition: all 0.3s ease;
+}
+
+/* 返回提示框样式 */
+#albumReturnTip {
+    background-color: rgba(23, 162, 184, 0.9);
+    color: white;
+    border: none;
+    border-radius: 25px;
+    padding: 12px 20px;
+    font-weight: 500;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#albumReturnTip i {
+    margin-right: 8px;
+}
+
+#albumReturnTip .btn {
+    margin-left: 8px;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+/* 高亮标记样式 */
+.photo-marker-highlight {
+    animation: pulse-highlight 1.5s infinite;
+    border: 3px solid #ff4757 !important;
+    box-shadow: 0 0 20px rgba(255, 71, 87, 0.7) !important;
+}
+
+@keyframes pulse-highlight {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+}
+
+/* 专辑查看器特定样式 */
+.album-mode .nav-btn {
+    background-color: rgba(52, 152, 219, 0.9);
+}
+
+.album-mode .toolbar-btn {
+    background-color: rgba(52, 152, 219, 0.85);
+}
+
+.album-mode .toolbar-btn:hover {
+    background-color: #2980b9;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    #albumFloat {
+        top: 60px;
+        right: 10px;
+        left: 10px;
+        width: auto;
+    }
+    
+    #albumReturnTip {
+        flex-direction: column;
+        gap: 5px;
+        padding: 10px 15px;
+    }
+    
+    #albumReturnTip .btn {
+        margin-left: 0;
+    }
+}
+
+/* 专辑预览项样式 */
+.preview-item.album-photo {
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.preview-item.album-photo:hover {
+    border-color: #3498db;
+    transform: scale(1.05);
+}
+
+.preview-item.album-photo.active {
+    border-color: #e74c3c;
+    box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
 }
