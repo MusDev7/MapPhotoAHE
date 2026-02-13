@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     
     <!-- Bootstrap CSS -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.8/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     
     <!-- Font Awesome 图标 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -40,14 +40,14 @@
             </div>
 
             <div class="d-flex">
-                <!-- 在导航栏搜索框后添加路线选择器 -->
+
                 <div class="btn-group me-2" role="group">
                     <button id="routeBtn" type="button" class="btn btn-outline-secondary" onclick="toggleRouteFloat()">
                         <i class="fas fa-location-arrow"></i> 路线
                     </button>
                 </div>
-                
-                <!-- 专辑选择器 -->
+
+                <!-- 在导航栏搜索框后添加专辑选择器 -->
                 <div class="btn-group me-2" role="group">
                     <button id="albumBtn" type="button" class="btn btn-outline-secondary" onclick="toggleAlbumFloat()">
                         <i class="fas fa-folder"></i> 专辑
@@ -73,6 +73,24 @@
             </div>
         </div>
     </nav>
+
+    <!-- 路线浮框 -->
+    <div id="routeFloat" class="card" style="position: fixed; top: 70px; left: 20px; width: 300px; z-index: 1000; display: none; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="fas fa-route me-1"></i> 选择路线</h6>
+            <button type="button" class="btn-close" onclick="closeRouteFloat()"></button>
+        </div>
+        <div class="card-body p-0">
+            <div id="routeList" style="max-height: 400px; overflow-y: auto;">
+                <!-- 路线列表将通过JS动态添加 -->
+            </div>
+        </div>
+        <div class="card-footer">
+            <button type="button" class="btn btn-sm btn-outline-secondary w-100" onclick="closeRouteFloat()">
+                关闭
+            </button>
+        </div>
+    </div>
 
     <!-- 专辑浮框 -->
     <div id="albumFloat" class="card" style="position: fixed; top: 70px; right: 20px; width: 300px; z-index: 1000; display: none; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
@@ -209,6 +227,7 @@
     <!-- 必要的JavaScript库 -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.min.js"></script>
     
     <!-- 照片数据 -->
     <script src="https://mapphoto-1317341370.cos.ap-beijing.myqcloud.com/photo_data.js"></script>
@@ -247,6 +266,12 @@
         let firstLocation = true;
         let albumPhotoIndex = 0;
         let isAlbumFloatVisible = false;
+
+        let routes = [];
+        let selectedRouteIds = [];      // 存储选中路线的 id
+        let routeLayerGroup = null;    // 所有路线图层的容器
+        let isRouteFloatVisible = false;
+                
 
         // 初始化地图
         function initMap() {
@@ -298,6 +323,15 @@
             });
             // 加载预置的照片数据
             loadPredefinedPhotos();
+        }
+
+        // 初始化路线图层组（确保始终在地图上）
+        function initRouteLayer() {
+            if (routeLayerGroup) {
+                if (map.hasLayer(routeLayerGroup)) map.removeLayer(routeLayerGroup);
+                routeLayerGroup = null;
+            }
+            routeLayerGroup = L.layerGroup().addTo(map);
         }
 
         function switchMapSource(switchTo) {
@@ -1021,7 +1055,7 @@
             // 数秒后隐藏弹窗
             setTimeout(() => {
                 hideUpdateNotification();
-            }, 10000);
+            }, 5000);
         }
 
         // 隐藏数据更新提示
@@ -1327,7 +1361,13 @@
 
         // 切换路线浮框显示/隐藏
         function toggleRouteFloat() {
-            alert('开发中');
+            const routeFloat = document.getElementById('routeFloat');
+            showRouteFloat();
+            // if (isRouteFloatVisible) {
+            //     closeRouteFloat();
+            // } else {
+            //     showRouteFloat();
+            // }
         }
 
         // 显示专辑浮框
@@ -1431,6 +1471,322 @@
             document.getElementById('locateBtn').style.display = 'inline-block';
         }
 
+// ---------------------- 路线多选模块（完全重写）-----------------------
+
+        // 路线颜色池（12色）
+        const routeColors = [
+            '#2196F3', '#9C27B0', '#FF9800', '#009688', '#E91E63',
+            '#795548', '#607D8B', '#4CAF50', '#FF5722', '#3F51B5',
+            '#FFC107', '#8BC34A'
+        ];
+
+        // 根据路线 id 生成固定颜色
+        function getRouteColor(routeId) {
+            let hash = 0;
+            for (let i = 0; i < routeId.length; i++) {
+                hash = ((hash << 5) - hash) + routeId.charCodeAt(i);
+                hash = hash & hash;
+            }
+            return routeColors[Math.abs(hash) % routeColors.length];
+        }
+
+        // 显示路线浮框
+        function showRouteFloat() {
+            if (!decryptedData?.routes?.length) {
+                alert('没有可用的路线数据');
+                return;
+            }
+            routes = decryptedData.routes;
+            renderRouteList();
+            document.getElementById('routeFloat').style.display = 'block';
+            isRouteFloatVisible = true;
+        }
+
+        // 关闭路线浮框（不清空已选路线）
+        function closeRouteFloat() {
+            document.getElementById('routeFloat').style.display = 'none';
+            isRouteFloatVisible = false;
+        }
+
+        // 渲染路线列表（复选框状态由 selectedRouteIds 决定）
+        function renderRouteList() {
+            const routeList = document.getElementById('routeList');
+            routeList.innerHTML = '';
+
+            if (!routes.length) {
+                routeList.innerHTML = '<div class="p-3 text-center text-muted">暂无路线</div>';
+                return;
+            }
+
+            routes.forEach(route => {
+                const isChecked = selectedRouteIds.includes(route.id);
+                const routeColor = getRouteColor(route.id);
+                const item = document.createElement('div');
+                item.className = 'route-item p-3 border-bottom';
+                item.style.cursor = 'pointer';
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div style="flex:1;">
+                            <div class="form-check d-flex align-items-center">
+                                <input class="form-check-input" type="checkbox" 
+                                    id="route-${route.id}" ${isChecked ? 'checked' : ''}
+                                    onchange="toggleRoute('${route.id}', this.checked)">
+                                <label class="form-check-label d-flex align-items-center" for="route-${route.id}">
+                                    <span style="display:inline-block; width:14px; height:14px; border-radius:3px; 
+                                                background-color:${routeColor}; margin:0 8px;"></span>
+                                    <h6 class="mb-0">${route.name}</h6>
+                                </label>
+                            </div>
+                            <p class="mb-0 text-muted small mt-1" style="margin-left:32px;">${route.description || '暂无描述'}</p>
+                            <div class="small mt-1" style="margin-left:32px;">
+                                <span class="badge bg-info">${formatDistance(route.route_data.distance)}</span>
+                                <span class="badge bg-secondary ms-1">${formatDuration(route.route_data.duration)}</span>
+                            </div>
+                        </div>
+                        <i class="fas fa-route" style="color:${routeColor}; opacity:0.7;"></i>
+                    </div>
+                `;
+
+                // 点击整行切换复选框
+                item.addEventListener('click', e => {
+                    if (!e.target.closest('.form-check-input')) {
+                        const cb = item.querySelector('.form-check-input');
+                        cb.checked = !cb.checked;
+                        toggleRoute(route.id, cb.checked);
+                    }
+                });
+                routeList.appendChild(item);
+            });
+        }
+
+        // 切换路线选中状态
+        function toggleRoute(routeId, isSelected) {
+            if (isSelected) {
+                if (!selectedRouteIds.includes(routeId)) selectedRouteIds.push(routeId);
+            } else {
+                selectedRouteIds = selectedRouteIds.filter(id => id !== routeId);
+            }
+            renderSelectedRoutes();
+        }
+
+        // 绘制所有选中的路线
+        function renderSelectedRoutes() {
+            // 关闭所有已打开的路线弹框
+            routes.forEach(route => {
+                if (route._popup) {
+                    map.closePopup(route._popup);
+                    route._popup = null;
+                }
+            });
+
+            if (!routeLayerGroup || !map.hasLayer(routeLayerGroup)) {
+                initRouteLayer();
+            }
+            routeLayerGroup.clearLayers();
+
+            const boundsPoints = [];
+            selectedRouteIds.forEach(id => {
+                const route = routes.find(r => r.id === id);
+                if (route) drawRoute(route, boundsPoints);
+            });
+
+            // 自动缩放至所有选中路线的范围
+            if (boundsPoints.length > 1) {
+                const bounds = L.latLngBounds(boundsPoints);
+                if (bounds.isValid()) map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+            } else if (boundsPoints.length === 1) {
+                map.setView(boundsPoints[0], 12);
+            }
+        }
+
+        // 绘制单条路线（同时收集边界点）
+        function drawRoute(route, boundsArray) {
+            const color = getRouteColor(route.id);
+            const coords = route.route_data.coordinates;
+
+            // ----- 路线线段 + 方向箭头 -----
+            if (coords?.length) {
+                // // 白色虚线描边
+                // L.polyline(coords, {
+                //     color: '#fff', weight: 7, opacity: 0.3,
+                //     dashArray: '10,10', lineJoin: 'round', smoothFactor: 1
+                // }).addTo(routeLayerGroup);
+
+                // 彩色主路线
+                const mainLine = L.polyline(coords, {
+                    color, weight: 5, opacity: 0.9,
+                    lineJoin: 'round', smoothFactor: 1
+                }).addTo(routeLayerGroup);
+
+                // ---------- 为路线添加点击弹框 ----------
+                mainLine.on('click', function (e) {
+                    // 如果该路线已有打开的弹框，先关闭
+                    if (route._popup) {
+                        map.closePopup(route._popup);
+                        route._popup = null;
+                    }
+
+                    // 计算路线中点
+                    const coords = route.route_data.coordinates;
+                    const mid = parseInt(route.route_data.coordinates.length / 2);
+                    const avgLat = coords[mid][0];
+                    const avgLng = coords[mid][1];
+
+                    // 构建途径点列表 HTML
+                    let waypointsHtml = '';
+                    if (route.waypoints?.length) {
+                        waypointsHtml = '<ul style="margin:5px 0 0 0; padding-left:20px; max-height:150px; overflow-y:auto;">';
+                        route.waypoints.forEach((wp, i) => {
+                            waypointsHtml += `<li>${i + 1}. ${wp.name || '未命名'} (第${wp.day || 1}天${wp.time ? ' ' + wp.time : ''})</li>`;
+                        });
+                        waypointsHtml += '</ul>';
+                    } else {
+                        waypointsHtml = '<p style="margin:5px 0 0 0; color:#999;">无途径点</p>';
+                    }
+
+                    // 弹框内容
+                    const content = `
+                        <div style="min-width: 260px; max-width: 320px; position: relative;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding-right: 5px;">
+                                <h4 style="margin:0; font-size: 16px; font-weight: bold;">${route.name}</h4>
+                            </div>
+                            <p style="margin: 8px 0 0 0; color: #555; font-size: 13px;">${route.description || '暂无描述'}</p>
+                            <div style="margin-top: 12px;">
+                                <strong style="font-size: 13px;">🚀 起点</strong>
+                                <p style="margin:5px 0 0 0;">${route.start_point.name}</p>
+                            </div>
+                            <div style="margin-top: 12px;">
+                                <strong style="font-size: 13px;">📌 途径点</strong>
+                                ${waypointsHtml}
+                            </div>
+                            <div style="margin-top: 12px;">
+                                <strong style="font-size: 13px;">🏁 终点</strong>
+                                <p style="margin:5px 0 0 0;">${route.end_point.name}</p>
+                            </div>
+                        </div>
+                    `;
+
+                    // 创建 Leaflet 弹框
+                    const popup = L.popup({
+                        autoClose: false,      // 不自动关闭
+                        closeOnClick: false,   // 点击地图不关闭
+                        closeButton: true     
+                    })
+                        .setLatLng([avgLat, avgLng])
+                        .setContent(content)
+                        .openOn(map);
+
+                    // 将当前弹框引用保存在 route 对象上
+                    route._popup = popup;
+                });
+
+                // 方向箭头（需引入 leaflet-polylinedecorator）
+                if (typeof L.polylineDecorator !== 'undefined') {
+                    L.polylineDecorator(mainLine, {
+                        patterns: [{
+                            // offset: '15%', 
+                            // repeat: '30%',
+                            repeat: 50,
+                            symbol: L.Symbol.arrowHead({
+                                pixelSize: 5, polygon: false,
+                                pathOptions: { stroke: true, color: '#FFFFFF', weight: 3, opacity: 0.9 }
+                            })
+                        }]
+                    }).addTo(routeLayerGroup);
+                }
+            }
+
+            // ----- 起点标记 -----
+            if (route.start_point?.lat && route.start_point?.lng) {
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="background:#4CAF50; color:white; width:36px; height:36px; 
+                            border-radius:50%; display:flex; align-items:center; justify-content:center;
+                            font-weight:bold; font-size:14px; border:3px solid white; box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                            起</div>`,
+                    iconSize: [46, 46], iconAnchor: [23, 23]
+                });
+                L.marker([route.start_point.lat, route.start_point.lng], { icon })
+                    .addTo(routeLayerGroup)
+                    .bindPopup(`<b>起点 · ${route.name}</b><br>${route.start_point.name}<br>
+                                ${route.start_point.day ? '第'+route.start_point.day+'天' : ''}`);
+                boundsArray.push([route.start_point.lat, route.start_point.lng]);
+            }
+
+            // ----- 终点标记 -----
+            if (route.end_point?.lat && route.end_point?.lng) {
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="background:#F44336; color:white; width:36px; height:36px; 
+                            border-radius:50%; display:flex; align-items:center; justify-content:center;
+                            font-weight:bold; font-size:14px; border:3px solid white; box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                            终</div>`,
+                    iconSize: [46, 46], iconAnchor: [23, 23]
+                });
+                L.marker([route.end_point.lat, route.end_point.lng], { icon })
+                    .addTo(routeLayerGroup)
+                    .bindPopup(`<b>终点 · ${route.name}</b><br>${route.end_point.name}<br>
+                                ${route.end_point.day ? '第'+route.end_point.day+'天' : ''}`);
+                boundsArray.push([route.end_point.lat, route.end_point.lng]);
+            }
+
+            // ----- 途径点标记 -----
+            if (route.waypoints?.length) {
+                route.waypoints.forEach((wp, i) => {
+                    if (!wp.lat || !wp.lng) return;
+                    const icon = L.divIcon({
+                        className: '',
+                        html: `<div style="background:${color}; color:white; width:32px; height:32px;
+                                border-radius:50%; display:flex; align-items:center; justify-content:center;
+                                font-weight:bold; font-size:12px; border:2px solid white;">
+                                ${i + 1}</div>`,
+                        iconSize: [36, 36], iconAnchor: [18, 18]
+                    });
+                    L.marker([wp.lat, wp.lng], { icon })
+                        .addTo(routeLayerGroup)
+                        .bindPopup(`<b>途径点 ${i+1} · ${route.name}</b><br>${wp.name}<br>
+                                    第 ${wp.day || 1} 天${wp.time ? ' ' + wp.time : ''}`);
+                    boundsArray.push([wp.lat, wp.lng]);
+                });
+            }
+
+            // 同时收集路线上的所有坐标点（用于更精确的边界）
+            if (coords?.length) {
+                coords.forEach(p => boundsArray.push(p));
+            }
+        }
+
+        // 格式化距离/时间（保持原有）
+        function formatDistance(meters) {
+            return meters < 1000 ? `${meters.toFixed(0)} 米` : `${(meters / 1000).toFixed(1)} 公里`;
+        }
+        function formatDuration(seconds) {
+            const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60);
+            return h ? `${h} 小时 ${m} 分钟` : `${m} 分钟`;
+        }
+        // 在加载数据时添加路线数据
+        function loadPredefinedPhotos() {
+            if (!decryptedData) {
+                // 显示密码输入框
+                const passwordModal = new bootstrap.Modal(document.getElementById('passwordModal'));
+                passwordModal.show();
+                return;
+            }
+            
+            // 确保移除所有模态框背景（添加这行代码）
+            document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+
+            decryptedData.photos.forEach(photo => {
+                addPhotoToMap(photo);
+            });
+            
+            // 更新照片聚类
+            updatePhotoClusters();
+
+            // 确保地图可以交互（添加这行代码）
+            map.getContainer().style.pointerEvents = 'auto';
+        }
+
         // 页面加载完成后初始化地图
         window.onload = function() {
             // 初始化地图
@@ -1475,7 +1831,7 @@
                 // loadAlbums();  // 加载专辑数据
                 setTimeout(showUpdateNotification, 500);
             }
-
+            initRouteLayer();
         };
 
 
