@@ -119,7 +119,7 @@
     <div id="updateNotification" class="update-notification">
         <div class="update-notification-content">
             <i class="fas fa-info-circle"></i>
-            <span id="updateMessage">数据更新至 <span id="updateTime"></span> （路线功能已上线，可与路线实体和途径点互动）</span>
+            <span id="updateMessage">数据更新至 <span id="updateTime"></span> （网站已下线）</span>
         </div>
     </div>
 
@@ -210,7 +210,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <p>此照片地图数据已加密，请输入密码查看</p>
+                    <p>此照片地图数据已加密，请输入密码查看（网站已下线）</p>
                     <div class="mb-3">
                         <label for="viewerPassword" class="form-label">密码</label>
                         <input type="password" class="form-control" id="viewerPassword" placeholder="输入密码">
@@ -1827,11 +1827,11 @@
             } else {
                 // 直接加载照片数据
                 decryptedData = a;
-                loadPredefinedPhotos();
+                // loadPredefinedPhotos();
                 // loadAlbums();  // 加载专辑数据
                 setTimeout(showUpdateNotification, 500);
             }
-            initRouteLayer();
+            // initRouteLayer();
         };
 
 
