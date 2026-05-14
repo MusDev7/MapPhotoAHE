@@ -663,7 +663,7 @@
         </div>
 
         <div class="photo-toolbar">
-            <button class="toolbar-btn" onclick="toggleDetails()">
+            <button class="toolbar-btn" onclick="toggleDetails(); event.stopPropagation();">
                 <i class="fas fa-info-circle"></i> 详情
             </button>
             <button class="toolbar-btn" id="locateBtn" onclick="locateCurrentPhoto()" style="display: none;">
@@ -832,7 +832,6 @@
         let previewScrollPosition = 0;
         const PREVIEWS_VISIBLE = 8; // 可见预览图数量
         const SERVER_HOST = 'https://mapphoto-1317341370.cos.ap-beijing.myqcloud.com/';
-        // const SERVER_HOST = './';
 
         let currentPhoto = null;
         let pendingPhotos = [];
@@ -2491,6 +2490,16 @@
             document.getElementById('viewerPassword').addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     decryptData();
+                }
+            });
+
+            // 点击详情面板外部关闭
+            document.addEventListener('click', function(e) {
+                if (isDetailsOpen) {
+                    const detailsPanel = document.getElementById('photoDetails');
+                    if (!detailsPanel.contains(e.target)) {
+                        closeDetails();
+                    }
                 }
             });
 
